@@ -19,14 +19,22 @@ type RemoteMessage struct {
 	Body             string
 	FormattedBody    string
 	GIFs             []TeamsGIF
+	InlineImages     []TeamsInlineImage
 	PropertiesFiles  string
+	PropertiesRaw    json.RawMessage // raw properties for extracting mentions etc.
 	Reactions        []MessageReaction
+	MessageType      string
+	SkypeEditedID    string // non-empty when this is an edit of an existing message
+	ReplyToID        string // message ID this is a reply to (from blockquote itemid)
+	ThreadRootID     string // root message ID for channel threaded replies
+	Mentions         []TeamsMention
 }
 
 type MessageContent struct {
 	Body          string
 	FormattedBody string
 	GIFs          []TeamsGIF
+	InlineImages  []TeamsInlineImage
 }
 
 type MessageReaction struct {
@@ -53,6 +61,9 @@ func ExtractContent(content json.RawMessage) MessageContent {
 		if gifs, ok := ParseGIFsFromHTML(plain); ok {
 			normalized.GIFs = gifs
 		}
+		if imgs, ok := ParseInlineImagesFromHTML(plain); ok {
+			normalized.InlineImages = imgs
+		}
 		return normalized
 	}
 	var obj struct {
@@ -62,6 +73,9 @@ func ExtractContent(content json.RawMessage) MessageContent {
 		normalized := NormalizeMessageBody(obj.Text)
 		if gifs, ok := ParseGIFsFromHTML(obj.Text); ok {
 			normalized.GIFs = gifs
+		}
+		if imgs, ok := ParseInlineImagesFromHTML(obj.Text); ok {
+			normalized.InlineImages = imgs
 		}
 		return normalized
 	}

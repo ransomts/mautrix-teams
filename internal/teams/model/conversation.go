@@ -253,6 +253,23 @@ func normalizeParticipantID(raw string) string {
 	return id
 }
 
+// ResolveTopic extracts the topic/description from conversation properties.
+// It returns the first non-empty topic found.
+func (c RemoteConversation) ResolveTopic() string {
+	for _, candidate := range []string{
+		c.ThreadProperties.Topic,
+		c.ThreadProperties.ThreadTopic,
+		c.Properties.Topic,
+		c.Properties.ThreadTopic,
+		c.Topic,
+	} {
+		if t := strings.TrimSpace(candidate); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
 func isLikelyTeamsBotID(raw string) bool {
 	id := strings.TrimSpace(strings.ToLower(raw))
 	if id == "" {

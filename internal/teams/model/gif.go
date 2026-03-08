@@ -90,6 +90,11 @@ func hasGiphyItemType(node *nethtml.Node) bool {
 	return strings.Contains(itemType, "schema.skype.com/giphy")
 }
 
+func hasEmojiItemType(node *nethtml.Node) bool {
+	itemType := strings.ToLower(strings.TrimSpace(getAttr(node, "itemtype")))
+	return strings.Contains(itemType, "schema.skype.com/emoji")
+}
+
 func getAttr(node *nethtml.Node, key string) string {
 	for _, attr := range node.Attr {
 		if strings.EqualFold(attr.Key, key) {

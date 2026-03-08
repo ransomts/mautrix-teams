@@ -22,6 +22,8 @@ var defaultScopes = []string{
 	"profile",
 	"offline_access",
 	"https://graph.microsoft.com/Files.ReadWrite",
+	"https://graph.microsoft.com/Team.ReadBasic.All",
+	"https://graph.microsoft.com/Channel.ReadBasic.All",
 }
 
 type Client struct {
