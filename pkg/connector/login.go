@@ -16,17 +16,25 @@ import (
 
 const (
 	FlowIDWebviewLocalStorage = "webview_localstorage"
+	FlowIDManualLocalStorage  = "manual_localstorage"
 
 	LoginStepIDWebviewLocalStorage = "go.mau.teams.webview_localstorage"
+	LoginStepIDManualLocalStorage  = "go.mau.teams.manual_localstorage"
 
 	teamsLoginSpecialStorage = "go.mau.teams.storage"
 	teamsLoginSpecialDebug   = "go.mau.teams.debug"
 )
 
 var loginFlowWebviewLocalStorage = bridgev2.LoginFlow{
-	Name:        "teams.live.com (in-app browser)",
+	Name:        "teams.microsoft.com (in-app browser)",
 	Description: "Login using an embedded browser and automatic localStorage extraction.",
 	ID:          FlowIDWebviewLocalStorage,
+}
+
+var loginFlowManualLocalStorage = bridgev2.LoginFlow{
+	Name:        "teams.microsoft.com (manual paste)",
+	Description: "Login by manually pasting localStorage JSON from browser DevTools.",
+	ID:          FlowIDManualLocalStorage,
 }
 
 type WebviewLocalStorageLogin struct {
@@ -68,7 +76,7 @@ func (l *WebviewLocalStorageLogin) Start(ctx context.Context) (*bridgev2.LoginSt
 		StepID:       LoginStepIDWebviewLocalStorage,
 		Instructions: instructions,
 		CookiesParams: &bridgev2.LoginCookiesParams{
-			URL: "https://teams.live.com/v2",
+			URL: "https://teams.microsoft.com",
 			Fields: []bridgev2.LoginCookieField{
 				{
 					ID:       "storage",
@@ -204,8 +212,7 @@ func (l *WebviewLocalStorageLogin) SubmitCookies(ctx context.Context, cookies ma
 	if raw == "" {
 		return nil, bridgev2.RespError{ErrCode: "FI.MAU.TEAMS_MISSING_STORAGE", Err: "Missing localStorage payload", StatusCode: http.StatusBadRequest}
 	}
-	clientID := resolveClientID(l.Main)
-	meta, err := ExtractTeamsLoginMetadataFromLocalStorage(ctx, raw, clientID)
+	meta, err := ExtractTeamsLoginMetadataFromLocalStorage(ctx, raw, l.Main)
 	if err != nil {
 		return nil, err
 	}
@@ -254,6 +261,86 @@ func startLoginConnect(login *bridgev2.UserLogin, baseCtx context.Context) {
 	}
 	ctx = login.Log.WithContext(ctx)
 	go login.Client.Connect(ctx)
+}
+
+// ManualLocalStorageLogin implements a login flow where the user manually
+// pastes localStorage JSON from their browser's DevTools console.
+type ManualLocalStorageLogin struct {
+	Main *TeamsConnector
+	User *bridgev2.User
+}
+
+var _ bridgev2.LoginProcessUserInput = (*ManualLocalStorageLogin)(nil)
+
+func (l *ManualLocalStorageLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
+	_ = ctx
+	if l != nil && l.User != nil {
+		l.User.Log.Info().Msg("Starting Teams manual localStorage login flow")
+	}
+	return &bridgev2.LoginStep{
+		Type:         bridgev2.LoginStepTypeUserInput,
+		StepID:       LoginStepIDManualLocalStorage,
+		Instructions: "1. Open https://teams.microsoft.com in your browser and log in\n2. Open DevTools (F12) → Console\n3. Run: copy(JSON.stringify(localStorage))\n4. Paste the result below",
+		UserInputParams: &bridgev2.LoginUserInputParams{
+			Fields: []bridgev2.LoginInputDataField{
+				{
+					Type:        bridgev2.LoginInputFieldTypeToken,
+					ID:          "storage",
+					Name:        "localStorage JSON",
+					Description: "The full localStorage JSON from teams.microsoft.com",
+				},
+			},
+		},
+	}, nil
+}
+
+func (l *ManualLocalStorageLogin) Cancel() {
+	if l != nil && l.User != nil {
+		l.User.Log.Warn().Msg("Teams manual localStorage login was canceled")
+	}
+}
+
+func (l *ManualLocalStorageLogin) SubmitUserInput(ctx context.Context, input map[string]string) (*bridgev2.LoginStep, error) {
+	if l == nil || l.Main == nil || l.User == nil {
+		return nil, errors.New("missing login state")
+	}
+	l.User.Log.Info().
+		Int("input_fields", len(input)).
+		Msg("Teams manual localStorage login submitted")
+	raw := strings.TrimSpace(input["storage"])
+	if raw == "" {
+		return nil, bridgev2.RespError{ErrCode: "FI.MAU.TEAMS_MISSING_STORAGE", Err: "Missing localStorage payload", StatusCode: http.StatusBadRequest}
+	}
+	meta, err := ExtractTeamsLoginMetadataFromLocalStorage(ctx, raw, l.Main)
+	if err != nil {
+		return nil, err
+	}
+	l.User.Log.Info().
+		Bool("graph_token_present", strings.TrimSpace(meta.GraphAccessToken) != "").
+		Msg("Teams login extracted Graph token state")
+	if meta.GraphExpiresAt != 0 {
+		l.User.Log.Debug().
+			Time("graph_expires_at", time.Unix(meta.GraphExpiresAt, 0).UTC()).
+			Msg("Teams login Graph token expiry")
+	}
+	ul, err := l.User.NewLogin(ctx, &database.UserLogin{
+		ID:         networkid.UserLoginID(meta.TeamsUserID),
+		RemoteName: meta.TeamsUserID,
+		Metadata:   meta,
+	}, &bridgev2.NewLoginParams{DeleteOnConflict: true})
+	if err != nil {
+		return nil, err
+	}
+	startLoginConnect(ul, loginConnectBaseCtx(l.Main))
+	return &bridgev2.LoginStep{
+		Type:         bridgev2.LoginStepTypeComplete,
+		StepID:       "go.mau.teams.complete",
+		Instructions: "Login complete.",
+		CompleteParams: &bridgev2.LoginCompleteParams{
+			UserLoginID: ul.ID,
+			UserLogin:   ul,
+		},
+	}, nil
 }
 
 func truncateForLog(value string, maxLen int) string {

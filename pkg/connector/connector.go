@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/rs/zerolog"
+
 	"maunium.net/go/mautrix/bridgev2"
 
 	"go.mau.fi/mautrix-teams/pkg/teamsdb"
@@ -14,6 +16,7 @@ type TeamsConnector struct {
 	Bridge *bridgev2.Bridge
 	Config TeamsConfig
 	DB     *teamsdb.Database
+	Log    zerolog.Logger
 }
 
 var _ bridgev2.NetworkConnector = (*TeamsConnector)(nil)
@@ -43,6 +46,13 @@ func (t *TeamsConnector) Start(ctx context.Context) error {
 	if err := t.DB.Upgrade(ctx); err != nil {
 		return bridgev2.DBUpgradeError{Err: err, Section: "teams"}
 	}
+	level := t.Config.ParsedLogLevel()
+	if t.Bridge != nil {
+		t.Log = t.Bridge.Log.With().Str("component", "teams").Logger().Level(level)
+	} else {
+		t.Log = zerolog.Nop()
+	}
+	t.Log.Info().Str("log_level", level.String()).Msg("Teams connector started")
 	return nil
 }
 
@@ -63,13 +73,18 @@ func (t *TeamsConnector) LoadUserLogin(ctx context.Context, login *bridgev2.User
 }
 
 func (t *TeamsConnector) GetLoginFlows() []bridgev2.LoginFlow {
-	return []bridgev2.LoginFlow{loginFlowWebviewLocalStorage}
+	return []bridgev2.LoginFlow{loginFlowManualLocalStorage, loginFlowWebviewLocalStorage}
 }
 
 func (t *TeamsConnector) CreateLogin(ctx context.Context, user *bridgev2.User, flowID string) (bridgev2.LoginProcess, error) {
 	switch flowID {
 	case FlowIDWebviewLocalStorage:
 		return &WebviewLocalStorageLogin{
+			Main: t,
+			User: user,
+		}, nil
+	case FlowIDManualLocalStorage:
+		return &ManualLocalStorageLogin{
 			Main: t,
 			User: user,
 		}, nil

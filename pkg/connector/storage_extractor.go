@@ -13,21 +13,22 @@ import (
 )
 
 const mbiRefreshScope = "service::api.fl.spaces.skype.com::MBI_SSL"
+const mbiTokenEndpoint = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 const graphFilesReadWriteScope = "https://graph.microsoft.com/Files.ReadWrite"
+const graphTeamReadScope = "https://graph.microsoft.com/Team.ReadBasic.All"
+const graphChannelReadScope = "https://graph.microsoft.com/Channel.ReadBasic.All"
 
 var newAuthClient = auth.NewClient
 
 // ExtractTeamsLoginMetadataFromLocalStorage parses the MSAL localStorage payload
 // and exchanges its access token for a Teams skypetoken.
-func ExtractTeamsLoginMetadataFromLocalStorage(ctx context.Context, rawStorage, clientID string) (*teamsid.UserLoginMetadata, error) {
+func ExtractTeamsLoginMetadataFromLocalStorage(ctx context.Context, rawStorage string, main *TeamsConnector) (*teamsid.UserLoginMetadata, error) {
+	clientID := resolveClientID(main)
 	state, err := auth.ExtractTokensFromMSALLocalStorage(rawStorage, clientID)
 	if err != nil {
 		return nil, bridgev2.RespError{ErrCode: "FI.MAU.TEAMS_INVALID_STORAGE", Err: fmt.Sprintf("Failed to extract tokens: %v", err), StatusCode: http.StatusBadRequest}
 	}
-	authClient := newAuthClient(nil)
-	if id := strings.TrimSpace(clientID); id != "" {
-		authClient.ClientID = id
-	}
+	authClient := newConfiguredAuthClient(main)
 	accessToken := strings.TrimSpace(state.AccessToken)
 	if accessToken == "" {
 		refreshToken := strings.TrimSpace(state.RefreshToken)
@@ -69,12 +70,12 @@ func ExtractTeamsLoginMetadataFromLocalStorage(ctx context.Context, rawStorage, 
 		}
 	}
 
-	token, expiresAt, skypeID, err := authClient.AcquireSkypeToken(ctx, accessToken)
+	skResult, err := authClient.AcquireSkypeToken(ctx, accessToken)
 	if err != nil {
 		return nil, bridgev2.RespError{ErrCode: "FI.MAU.TEAMS_SKYPETOKEN_FAILED", Err: fmt.Sprintf("Failed to acquire skypetoken: %v", err), StatusCode: http.StatusBadRequest}
 	}
 
-	teamsUserID := auth.NormalizeTeamsUserID(skypeID)
+	teamsUserID := auth.NormalizeTeamsUserID(skResult.SkypeID)
 	if teamsUserID == "" {
 		return nil, bridgev2.RespError{ErrCode: "FI.MAU.TEAMS_MISSING_USER_ID", Err: "Teams user ID missing from skypetoken response", StatusCode: http.StatusBadRequest}
 	}
@@ -82,18 +83,22 @@ func ExtractTeamsLoginMetadataFromLocalStorage(ctx context.Context, rawStorage, 
 	return &teamsid.UserLoginMetadata{
 		RefreshToken:         state.RefreshToken,
 		AccessTokenExpiresAt: state.ExpiresAtUnix,
-		SkypeToken:           token,
-		SkypeTokenExpiresAt:  expiresAt,
+		SkypeToken:           skResult.Token,
+		SkypeTokenExpiresAt:  skResult.ExpiresAt,
 		GraphAccessToken:     strings.TrimSpace(state.GraphAccessToken),
 		GraphExpiresAt:       state.GraphExpiresAt,
 		TeamsUserID:          teamsUserID,
+		RegionChatServiceURL: skResult.ChatServiceURL,
+		RegionAmsURL:         skResult.AmsURL,
 	}, nil
 }
 
 func refreshAccessTokenForSkypeScope(ctx context.Context, client *auth.Client, refreshToken string) (*auth.AuthState, error) {
 	// Prefer requesting the Skype MBI scope explicitly for skypetoken bootstrap.
+	// The MBI scope only works on the /common endpoint, not tenant-specific ones.
 	retryClient := *client
-	retryClient.Scopes = []string{mbiRefreshScope, "offline_access"}
+	retryClient.Scopes = []string{mbiRefreshScope}
+	retryClient.TokenEndpoint = mbiTokenEndpoint
 	refreshed, err := retryClient.RefreshAccessToken(ctx, refreshToken)
 	if err == nil {
 		return refreshed, nil
@@ -112,14 +117,14 @@ func refreshAccessTokenForSkypeScope(ctx context.Context, client *auth.Client, r
 
 func refreshAccessTokenForGraphScope(ctx context.Context, client *auth.Client, refreshToken string) (*auth.AuthState, error) {
 	retryClient := *client
-	retryClient.Scopes = []string{graphFilesReadWriteScope, "offline_access"}
+	retryClient.Scopes = []string{graphFilesReadWriteScope, graphTeamReadScope, graphChannelReadScope}
 	refreshed, err := retryClient.RefreshAccessToken(ctx, refreshToken)
 	if err == nil {
 		return refreshed, nil
 	}
 
 	fallbackClient := *client
-	fallbackClient.Scopes = []string{"openid", "profile", "offline_access", graphFilesReadWriteScope}
+	fallbackClient.Scopes = []string{"openid", "profile", "offline_access", graphFilesReadWriteScope, graphTeamReadScope, graphChannelReadScope}
 	refreshed, fallbackErr := fallbackClient.RefreshAccessToken(ctx, refreshToken)
 	if fallbackErr == nil {
 		return refreshed, nil
@@ -135,4 +140,48 @@ func resolveClientID(main *TeamsConnector) string {
 		}
 	}
 	return auth.NewClient(nil).ClientID
+}
+
+// newConfiguredAuthClient creates an auth.Client with config overrides applied.
+func newConfiguredAuthClient(main *TeamsConnector) *auth.Client {
+	return newConfiguredAuthClientForLogin(main, nil)
+}
+
+// newConfiguredAuthClientForLogin creates an auth.Client with config overrides applied,
+// preferring per-login tenant settings over global config.
+func newConfiguredAuthClientForLogin(main *TeamsConnector, meta *teamsid.UserLoginMetadata) *auth.Client {
+	client := newAuthClient(nil)
+	if main != nil {
+		if id := strings.TrimSpace(main.Config.ClientID); id != "" {
+			client.ClientID = id
+		}
+		if ep := strings.TrimSpace(main.Config.AuthorizeEndpoint); ep != "" {
+			client.AuthorizeEndpoint = ep
+		}
+		if ep := strings.TrimSpace(main.Config.TokenEndpoint); ep != "" {
+			client.TokenEndpoint = ep
+		}
+		if ep := strings.TrimSpace(main.Config.SkypeTokenEndpoint); ep != "" {
+			client.SkypeTokenEndpoint = ep
+		}
+		if uri := strings.TrimSpace(main.Config.RedirectURI); uri != "" {
+			client.RedirectURI = uri
+		}
+	}
+	// Per-login overrides take precedence over global config.
+	if meta != nil {
+		if ep := strings.TrimSpace(meta.AuthorizeEndpoint); ep != "" {
+			client.AuthorizeEndpoint = ep
+		}
+		if ep := strings.TrimSpace(meta.TokenEndpoint); ep != "" {
+			client.TokenEndpoint = ep
+		}
+		if ep := strings.TrimSpace(meta.SkypeTokenEndpoint); ep != "" {
+			client.SkypeTokenEndpoint = ep
+		}
+		if uri := strings.TrimSpace(meta.RedirectURI); uri != "" {
+			client.RedirectURI = uri
+		}
+	}
+	return client
 }

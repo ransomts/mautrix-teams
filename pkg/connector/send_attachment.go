@@ -39,10 +39,7 @@ func (c *TeamsClient) sendAttachmentMessageWithClientMessageID(ctx context.Conte
 		return "", errors.New("attachment exceeds max size")
 	}
 
-	consumer := c.newConsumer()
-	if consumer == nil {
-		return "", errors.New("missing consumer client")
-	}
+	api := c.getAPI()
 
 	graphToken, err := c.Meta.GetGraphAccessToken()
 	if err != nil {
@@ -65,7 +62,7 @@ func (c *TeamsClient) sendAttachmentMessageWithClientMessageID(ctx context.Conte
 	}
 	orch := &internalbridge.AttachmentOrchestrator{
 		Graph:             gc,
-		Teams:             consumer,
+		Teams:             api,
 		Log:               &c.Login.Log,
 		FromUserID:        strings.TrimSpace(c.Meta.TeamsUserID),
 		MaxBytes:          internalbridge.MaxAttachmentBytesV0,

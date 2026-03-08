@@ -129,7 +129,14 @@ func MapEmojiToEmotionKey(emoji string) (string, bool) {
 	}
 	normalized := variationselector.FullyQualify(emoji)
 	key, ok := emojiToEmotionKey[normalized]
-	return key, ok
+	if ok {
+		return key, true
+	}
+	// Passthrough: if it looks like a Unicode emoji (non-ASCII, short), use it directly.
+	if IsUnicodeEmoji(normalized) {
+		return normalized, true
+	}
+	return "", false
 }
 
 func MapEmotionKeyToEmoji(emotionKey string) (string, bool) {
@@ -138,7 +145,36 @@ func MapEmotionKeyToEmoji(emotionKey string) (string, bool) {
 		return "", false
 	}
 	emoji, ok := emotionKeyToEmoji[emotionKey]
-	return emoji, ok
+	if ok {
+		return emoji, true
+	}
+	// Passthrough: if the emotion key looks like a Unicode emoji, use it as-is.
+	if IsUnicodeEmoji(emotionKey) {
+		return emotionKey, true
+	}
+	// Custom org emoji: use the key as a shortcode-style text.
+	if len(emotionKey) > 0 {
+		return ":" + emotionKey + ":", true
+	}
+	return "", false
+}
+
+// IsUnicodeEmoji returns true if s appears to be a Unicode emoji character(s).
+// It checks that the string is non-ASCII and short (≤20 bytes, typical for emoji sequences).
+func IsUnicodeEmoji(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" || len(s) > 20 {
+		return false
+	}
+	for _, r := range s {
+		if r < 0x80 {
+			// Allow variation selectors and zero-width joiners
+			if r != 0x20 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func NormalizeTeamsReactionMessageID(value string) string {

@@ -40,6 +40,18 @@ type UserLoginMetadata struct {
 	GraphAccessToken    string `json:"graph_access_token,omitempty"`
 	GraphExpiresAt      int64  `json:"graph_expires_at,omitempty"`
 	TeamsUserID         string `json:"teams_user_id,omitempty"`
+
+	// Enterprise region URLs from skype token response (regionGtms).
+	RegionChatServiceURL string `json:"region_chat_service_url,omitempty"`
+	RegionAmsURL         string `json:"region_ams_url,omitempty"`
+
+	// Per-login tenant overrides. When set, these take precedence over the
+	// global connector config, allowing multiple tenants on one bridge instance.
+	TenantID           string `json:"tenant_id,omitempty"`
+	AuthorizeEndpoint  string `json:"authorize_endpoint,omitempty"`
+	TokenEndpoint      string `json:"token_endpoint,omitempty"`
+	SkypeTokenEndpoint string `json:"skype_token_endpoint,omitempty"`
+	RedirectURI        string `json:"redirect_uri,omitempty"`
 }
 
 const graphTokenExpirySkew = 60 * time.Second

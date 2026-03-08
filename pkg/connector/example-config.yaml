@@ -1,3 +1,30 @@
 # OAuth client ID used for Teams login token extraction (MSAL localStorage).
 # Leave empty to use the default Teams web app client ID.
 client_id: ""
+# OAuth authorize endpoint. For enterprise/organizational accounts, set this to
+# https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/authorize
+# Leave empty to use the default (consumer accounts).
+authorize_endpoint: ""
+# OAuth token endpoint. For enterprise/organizational accounts, set this to
+# https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token
+# Leave empty to use the default (consumer accounts).
+token_endpoint: ""
+# Skype token endpoint for acquiring Teams skypetoken.
+# For enterprise accounts, use https://teams.microsoft.com/api/authsvc/v1.0/authz
+# Leave empty to use the default (consumer accounts).
+skype_token_endpoint: ""
+# OAuth redirect URI. For enterprise accounts, may need to be set to
+# https://teams.microsoft.com/go
+# Leave empty to use the default (consumer accounts).
+redirect_uri: ""
+# Sync mode controls how the bridge receives Teams events.
+# "poll" (default): short-polling with adaptive backoff.
+# "longpoll": long-polling via Teams Consumer API for lower latency.
+sync_mode: "poll"
+# Log level for bridge-specific logging.
+# "trace": very verbose (message payloads, API request/response details)
+# "debug": operational details (message IDs, download progress, sync events)
+# "info": major state changes (login, sync mode, token refresh)
+# "warn": retriable failures and anomalies
+# "error": fatal issues
+log_level: "info"
