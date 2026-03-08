@@ -726,3 +726,103 @@ func TestCompareSequenceIDFallback(t *testing.T) {
 		t.Fatalf("expected lexicographic comparison when parse fails")
 	}
 }
+
+func TestSendMessageWithMentionsSuccess(t *testing.T) {
+	var payload map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	client.SendMessagesURL = server.URL + "/conversations"
+	client.Token = "token123"
+
+	mentions := []map[string]any{
+		{"id": 0, "mri": "8:orgid:alice-uuid", "displayName": "Alice"},
+		{"id": 1, "mri": "8:orgid:bob-uuid", "displayName": "Bob"},
+	}
+	body := `<span itemtype="http://schema.skype.com/Mention" itemid="0">@Alice</span> and <span itemtype="http://schema.skype.com/Mention" itemid="1">@Bob</span>`
+	statusCode, err := client.SendMessageWithMentions(context.Background(), "@19:abc@thread.v2", body, "8:live:me", "12345", mentions)
+	if err != nil {
+		t.Fatalf("SendMessageWithMentions failed: %v", err)
+	}
+	if statusCode != http.StatusOK {
+		t.Fatalf("unexpected status code: %d", statusCode)
+	}
+
+	// Verify message type is RichText/Html.
+	if payload["messagetype"] != "RichText/Html" {
+		t.Fatalf("unexpected messagetype: %v", payload["messagetype"])
+	}
+
+	// Verify properties contain mentions.
+	props, ok := payload["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected properties map, got %T", payload["properties"])
+	}
+	mentionsProp, ok := props["mentions"].([]interface{})
+	if !ok {
+		t.Fatalf("expected mentions array in properties, got %T", props["mentions"])
+	}
+	if len(mentionsProp) != 2 {
+		t.Fatalf("expected 2 mentions, got %d", len(mentionsProp))
+	}
+	first := mentionsProp[0].(map[string]interface{})
+	if first["mri"] != "8:orgid:alice-uuid" {
+		t.Fatalf("unexpected first mention mri: %v", first["mri"])
+	}
+	if first["displayName"] != "Alice" {
+		t.Fatalf("unexpected first mention displayName: %v", first["displayName"])
+	}
+}
+
+func TestSendMessageWithMentionsMissingToken(t *testing.T) {
+	client := NewClient(http.DefaultClient)
+	client.SendMessagesURL = "http://localhost/conversations"
+
+	_, err := client.SendMessageWithMentions(context.Background(), "@19:abc@thread.v2", "hello", "", "12345", nil)
+	if err == nil {
+		t.Fatalf("expected error for missing token")
+	}
+}
+
+func TestListMessagesMentionsParsing(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"messages":[{` +
+			`"id":"m1","sequenceId":"1",` +
+			`"content":"Hey <span itemtype=\"http://schema.skype.com/Mention\" itemid=\"0\">Alice</span>",` +
+			`"properties":{"mentions":[{"id":0,"mri":"8:orgid:alice-uuid","displayName":"Alice"}]}` +
+			`}]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	client.MessagesURL = server.URL + "/conversations"
+	client.Token = "token123"
+
+	msgs, err := client.ListMessages(context.Background(), "@oneToOne.skype", "")
+	if err != nil {
+		t.Fatalf("ListMessages failed: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("unexpected messages length: %d", len(msgs))
+	}
+	if len(msgs[0].Mentions) != 1 {
+		t.Fatalf("expected 1 mention, got %d", len(msgs[0].Mentions))
+	}
+	if msgs[0].Mentions[0].UserID != "8:orgid:alice-uuid" {
+		t.Fatalf("unexpected mention UserID: %q", msgs[0].Mentions[0].UserID)
+	}
+	if msgs[0].Mentions[0].DisplayName != "Alice" {
+		t.Fatalf("unexpected mention DisplayName: %q", msgs[0].Mentions[0].DisplayName)
+	}
+	if msgs[0].Mentions[0].ItemID != "0" {
+		t.Fatalf("unexpected mention ItemID: %q", msgs[0].Mentions[0].ItemID)
+	}
+}

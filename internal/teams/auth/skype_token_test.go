@@ -23,20 +23,20 @@ func TestAcquireSkypeTokenSuccess(t *testing.T) {
 	client.SkypeTokenEndpoint = server.URL
 
 	start := time.Now().UTC()
-	token, expiresAt, skypeID, err := client.AcquireSkypeToken(context.Background(), "msal")
+	result, err := client.AcquireSkypeToken(context.Background(), "msal")
 	if err != nil {
 		t.Fatalf("AcquireSkypeToken failed: %v", err)
 	}
-	if token != "jwt" {
-		t.Fatalf("unexpected token: %s", token)
+	if result.Token != "jwt" {
+		t.Fatalf("unexpected token: %s", result.Token)
 	}
-	if skypeID != "live:tester" {
-		t.Fatalf("unexpected skype id: %s", skypeID)
+	if result.SkypeID != "live:tester" {
+		t.Fatalf("unexpected skype id: %s", result.SkypeID)
 	}
 	minExpiry := start.Add(10 * time.Second).Unix()
 	maxExpiry := time.Now().UTC().Add(12 * time.Second).Unix()
-	if expiresAt < minExpiry || expiresAt > maxExpiry {
-		t.Fatalf("unexpected expiry: %d", expiresAt)
+	if result.ExpiresAt < minExpiry || result.ExpiresAt > maxExpiry {
+		t.Fatalf("unexpected expiry: %d", result.ExpiresAt)
 	}
 }
 
@@ -54,7 +54,7 @@ func TestAcquireSkypeTokenMissingToken(t *testing.T) {
 	client := NewClient(nil)
 	client.SkypeTokenEndpoint = server.URL
 
-	_, _, _, err := client.AcquireSkypeToken(context.Background(), "msal")
+	_, err := client.AcquireSkypeToken(context.Background(), "msal")
 	if err == nil {
 		t.Fatalf("expected error for missing token")
 	}
@@ -70,7 +70,7 @@ func TestAcquireSkypeTokenNon2xx(t *testing.T) {
 	client := NewClient(nil)
 	client.SkypeTokenEndpoint = server.URL
 
-	_, _, _, err := client.AcquireSkypeToken(context.Background(), "msal")
+	_, err := client.AcquireSkypeToken(context.Background(), "msal")
 	if err == nil {
 		t.Fatalf("expected error for non-2xx")
 	}
@@ -80,7 +80,7 @@ func TestAcquireSkypeTokenMissingAccessToken(t *testing.T) {
 	client := NewClient(nil)
 	client.SkypeTokenEndpoint = "https://example.invalid"
 
-	_, _, _, err := client.AcquireSkypeToken(context.Background(), "")
+	_, err := client.AcquireSkypeToken(context.Background(), "")
 	if err == nil {
 		t.Fatalf("expected error for missing access token")
 	}

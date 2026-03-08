@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"go.mau.fi/mautrix-teams/internal/teams/auth"
@@ -41,7 +42,7 @@ func TestExtractTeamsLoginMetadataFromLocalStorage_PersistsGraphToken(t *testing
 		t.Fatalf("marshal failed: %v", err)
 	}
 
-	meta, err := ExtractTeamsLoginMetadataFromLocalStorage(context.Background(), string(payload), auth.NewClient(nil).ClientID)
+	meta, err := ExtractTeamsLoginMetadataFromLocalStorage(context.Background(), string(payload), nil)
 	if err != nil {
 		t.Fatalf("unexpected extraction error: %v", err)
 	}
@@ -85,7 +86,7 @@ func TestExtractTeamsLoginMetadataFromLocalStorage_NoGraphTokenStillSucceeds(t *
 		t.Fatalf("marshal failed: %v", err)
 	}
 
-	meta, err := ExtractTeamsLoginMetadataFromLocalStorage(context.Background(), string(payload), auth.NewClient(nil).ClientID)
+	meta, err := ExtractTeamsLoginMetadataFromLocalStorage(context.Background(), string(payload), nil)
 	if err != nil {
 		t.Fatalf("unexpected extraction error: %v", err)
 	}
@@ -110,7 +111,7 @@ func TestExtractTeamsLoginMetadataFromLocalStorage_RefreshesGraphWhenMissingInSt
 		switch {
 		case scope == "service::api.fl.spaces.skype.com::MBI_SSL offline_access":
 			_, _ = w.Write([]byte(`{"access_token":"mbi-from-refresh","refresh_token":"refresh-updated","expires_in":3600}`))
-		case scope == "https://graph.microsoft.com/Files.ReadWrite offline_access":
+		case strings.Contains(scope, "https://graph.microsoft.com/Files.ReadWrite"):
 			_, _ = w.Write([]byte(`{"access_token":"graph-from-refresh","refresh_token":"refresh-updated-2","expires_in":7200}`))
 		default:
 			w.WriteHeader(http.StatusBadRequest)
@@ -147,7 +148,7 @@ func TestExtractTeamsLoginMetadataFromLocalStorage_RefreshesGraphWhenMissingInSt
 		t.Fatalf("marshal failed: %v", err)
 	}
 
-	meta, err := ExtractTeamsLoginMetadataFromLocalStorage(context.Background(), string(payload), auth.NewClient(nil).ClientID)
+	meta, err := ExtractTeamsLoginMetadataFromLocalStorage(context.Background(), string(payload), nil)
 	if err != nil {
 		t.Fatalf("unexpected extraction error: %v", err)
 	}
