@@ -2,9 +2,14 @@ FROM golang:1-alpine3.23 AS builder
 
 RUN apk add --no-cache git ca-certificates build-base su-exec olm-dev
 
-COPY . /build
 WORKDIR /build
-RUN ./build.sh
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . /build
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg \
+    ./build.sh
 
 FROM alpine:3.23
 
