@@ -8,9 +8,9 @@ import (
 
 func TestMapTeamsPresence(t *testing.T) {
 	tests := []struct {
-		availability    string
-		wantPresence    event.Presence
-		wantStatusMsg   string
+		availability  string
+		wantPresence  event.Presence
+		wantStatusMsg string
 	}{
 		{"Available", event.PresenceOnline, ""},
 		{"Busy", event.PresenceOnline, "Busy"},

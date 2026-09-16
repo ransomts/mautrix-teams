@@ -85,6 +85,9 @@ func (c *TeamsClient) pollPresence(ctx context.Context) {
 		}
 
 		c.presenceMu.Lock()
+		if c.presenceCache == nil {
+			c.presenceCache = make(map[string]string)
+		}
 		for uid, p := range presenceMap {
 			if p == nil {
 				continue

@@ -104,7 +104,7 @@ func (c *GraphClient) ListDirectoryUsers(ctx context.Context) ([]GraphUser, erro
 
 		var result struct {
 			Value    []GraphUser `json:"value"`
-			NextLink string     `json:"@odata.nextLink"`
+			NextLink string      `json:"@odata.nextLink"`
 		}
 		if err := json.Unmarshal(body, &result); err != nil {
 			return nil, err
@@ -156,9 +156,9 @@ func (c *GraphClient) SearchPeople(ctx context.Context, query string) ([]GraphUs
 
 	var result struct {
 		Value []struct {
-			ID                    string `json:"id"`
-			DisplayName           string `json:"displayName"`
-			UserPrincipalName     string `json:"userPrincipalName"`
+			ID                   string `json:"id"`
+			DisplayName          string `json:"displayName"`
+			UserPrincipalName    string `json:"userPrincipalName"`
 			ScoredEmailAddresses []struct {
 				Address string `json:"address"`
 			} `json:"scoredEmailAddresses"`

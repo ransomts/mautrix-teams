@@ -17,9 +17,9 @@ const defaultEndpointsURL = "https://teams.live.com/api/chatsvc/consumer/v1/user
 // PollEvent represents a single notification event from the long-poll endpoint.
 type PollEvent struct {
 	ResourceType string `json:"resourceType"` // "NewMessage", "MessageUpdate", "EndpointPresence", "ThreadUpdate"
-	Resource     string `json:"resource"`      // Resource path, e.g. "/v1/users/ME/conversations/19:xxx@thread.v2/messages/1234"
-	ResourceLink string `json:"resourceLink"`  // Full URL to the resource
-	Time         string `json:"time"`          // ISO timestamp
+	Resource     string `json:"resource"`     // Resource path, e.g. "/v1/users/ME/conversations/19:xxx@thread.v2/messages/1234"
+	ResourceLink string `json:"resourceLink"` // Full URL to the resource
+	Time         string `json:"time"`         // ISO timestamp
 }
 
 // RegisterEndpoint registers a notification endpoint for the current user.
@@ -203,8 +203,10 @@ func (c *Client) LongPoll(ctx context.Context, endpointID string, timeout time.D
 	}
 	pollURL += fmt.Sprintf("?timeout=%d", timeoutSec)
 
-	// Use a longer HTTP timeout than the poll timeout to avoid premature cancellation.
-	httpCtx, cancel := context.WithTimeout(ctx, timeout+10*time.Second)
+	// The server holds the connection for up to `timeout`; bound the request
+	// with a context slightly longer than that instead of the client's global
+	// Timeout, which would cut idle long-polls short.
+	httpCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second+10*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(httpCtx, http.MethodGet, pollURL, nil)
@@ -214,7 +216,7 @@ func (c *Client) LongPoll(ctx context.Context, endpointID string, timeout time.D
 	req.Header.Set("authentication", "skypetoken="+c.Token)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.HTTP.Do(req)
+	resp, err := c.longPollHTTP().Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +240,20 @@ func (c *Client) LongPoll(ctx context.Context, endpointID string, timeout time.D
 	}
 
 	return result.EventMessages, nil
+}
+
+// longPollHTTP returns a copy of the client's HTTP client without a global
+// Timeout, so that long-poll requests are bounded only by their context.
+func (c *Client) longPollHTTP() *http.Client {
+	if c.HTTP == nil {
+		return nil
+	}
+	if c.HTTP.Timeout == 0 {
+		return c.HTTP
+	}
+	clone := *c.HTTP
+	clone.Timeout = 0
+	return &clone
 }
 
 // ExtractThreadIDFromResource parses a thread ID from a poll event resource path.

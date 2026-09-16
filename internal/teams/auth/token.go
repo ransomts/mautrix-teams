@@ -25,7 +25,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code, verifier string) (*Auth
 		return nil, errors.New("missing authorization code")
 	}
 	if c.Log != nil {
-		c.Log.Info().Str("redirect_uri", c.RedirectURI).Str("code_verifier", verifier).Msg("Exchanging authorization code")
+		c.Log.Info().Str("redirect_uri", c.RedirectURI).Msg("Exchanging authorization code")
 	}
 	values := url.Values{}
 	values.Set("client_id", c.ClientID)

@@ -280,7 +280,7 @@ func (c *TeamsClient) GetCapabilities(ctx context.Context, portal *bridgev2.Port
 	}
 	return &event.RoomFeatures{
 		// Bump when capabilities change so Beeper refreshes cached feature info.
-		ID: "fi.mau.teams.capabilities.2026_03_08_2",
+		ID: "fi.mau.teams.capabilities.2026_09_15_1",
 		File: event.FileFeatureMap{
 			event.MsgFile:  fileFeatures,
 			event.MsgImage: fileFeatures,
@@ -289,6 +289,7 @@ func (c *TeamsClient) GetCapabilities(ctx context.Context, portal *bridgev2.Port
 		},
 		Reaction:               event.CapLevelFullySupported,
 		Reply:                  event.CapLevelFullySupported,
+		Thread:                 event.CapLevelFullySupported,
 		Edit:                   event.CapLevelFullySupported,
 		Delete:                 event.CapLevelFullySupported,
 		TypingNotifications:    true,

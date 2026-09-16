@@ -22,6 +22,20 @@ type pollState struct {
 	nextPoll time.Time
 }
 
+const (
+	// pollLoopMaxSleep bounds how long the poll loop sleeps between passes.
+	pollLoopMaxSleep = 5 * time.Second
+	// pollLoopMinSleep prevents a hot loop when many threads are due at once.
+	pollLoopMinSleep = 100 * time.Millisecond
+	// typingTimeout is how long a bridged typing indicator stays active.
+	typingTimeout = 5 * time.Second
+	// typingMaxAge drops typing control messages older than this; they are
+	// stale leftovers from a previous poll page, not live typing.
+	typingMaxAge = 15 * time.Second
+	// typingDedupWindow suppresses repeated typing events for one sender.
+	typingDedupWindow = 3 * time.Second
+)
+
 func (c *TeamsClient) pollAllThreadsOnce(ctx context.Context) error {
 	threads, err := c.Main.DB.ThreadState.ListForLogin(ctx, c.Login.ID)
 	if err != nil {
@@ -66,7 +80,7 @@ func (c *TeamsClient) pollDueThreads(ctx context.Context, initialDiscoverySuccee
 			}
 			nextDiscovery = now.Add(threadDiscoveryInterval)
 		}
-		nextWake := now.Add(5 * time.Second)
+		nextWake := now.Add(pollLoopMaxSleep)
 
 		threads, err := c.Main.DB.ThreadState.ListForLogin(ctx, c.Login.ID)
 		if err != nil {
@@ -97,8 +111,8 @@ func (c *TeamsClient) pollDueThreads(ctx context.Context, initialDiscoverySuccee
 		}
 
 		sleep := time.Until(nextWake)
-		if sleep < 100*time.Millisecond {
-			sleep = 100 * time.Millisecond
+		if sleep < pollLoopMinSleep {
+			sleep = pollLoopMinSleep
 		}
 		timer := time.NewTimer(sleep)
 		select {
@@ -140,12 +154,20 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 			continue
 		}
 
-		// Detect typing indicators and emit them as remote events.
+		// Detect typing indicators and emit them as remote events. Control
+		// messages never advance the cursor, so the same page can carry them
+		// on every poll: only act on ones newer than the cursor and recent.
 		if strings.EqualFold(msg.MessageType, "Control/Typing") || strings.EqualFold(msg.MessageType, "Control/ClearTyping") ||
 			strings.EqualFold(msg.MessageType, "Control/LiveState") {
+			if lastSeq != "" && model.CompareSequenceID(strings.TrimSpace(msg.SequenceID), lastSeq) <= 0 {
+				continue
+			}
+			if !msg.Timestamp.IsZero() && now.Sub(msg.Timestamp) > typingMaxAge {
+				continue
+			}
 			senderID := model.NormalizeTeamsUserID(msg.SenderID)
 			if senderID != "" && senderID != selfID && !isLikelyThreadID(senderID) {
-				timeout := 5 * time.Second
+				timeout := typingTimeout
 				if strings.EqualFold(msg.MessageType, "Control/ClearTyping") {
 					timeout = 0
 				}
@@ -301,7 +323,7 @@ func (c *TeamsClient) shouldEmitTyping(threadID, senderID string) bool {
 	if c.typingSeen == nil {
 		c.typingSeen = make(map[string]time.Time)
 	}
-	if lastSeen, ok := c.typingSeen[key]; ok && now.Sub(lastSeen) < 3*time.Second {
+	if lastSeen, ok := c.typingSeen[key]; ok && now.Sub(lastSeen) < typingDedupWindow {
 		return false
 	}
 	c.typingSeen[key] = now

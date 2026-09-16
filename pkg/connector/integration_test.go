@@ -31,24 +31,24 @@ type mockTeamsAPI struct {
 	mu sync.Mutex
 
 	// Canned responses
-	messages             []model.RemoteMessage
-	listMessagesErr      error
-	consumptionHorizons  *model.ConsumptionHorizonsResponse
-	conversations        []model.RemoteConversation
+	messages            []model.RemoteMessage
+	listMessagesErr     error
+	consumptionHorizons *model.ConsumptionHorizonsResponse
+	conversations       []model.RemoteConversation
 
 	// Call tracking
-	sentMessages          []sentMessage
-	sentEdits             []sentEdit
-	sentDeletes           []sentDelete
-	sentReactions         []sentReaction
-	removedReactions      []removedReaction
-	sentTyping            []sentTyping
-	setHorizons           []setHorizon
-	updatedTopics         []updatedTopic
-	createdConversations  []createdConversation
-	createdGroupConvs     []createdGroupConversation
-	addedMembers          []addedMember
-	removedMembers        []removedMember
+	sentMessages         []sentMessage
+	sentEdits            []sentEdit
+	sentDeletes          []sentDelete
+	sentReactions        []sentReaction
+	removedReactions     []removedReaction
+	sentTyping           []sentTyping
+	setHorizons          []setHorizon
+	updatedTopics        []updatedTopic
+	createdConversations []createdConversation
+	createdGroupConvs    []createdGroupConversation
+	addedMembers         []addedMember
+	removedMembers       []removedMember
 }
 
 type sentMessage struct {
@@ -489,13 +489,13 @@ func TestPollThread_DetectsMessageEdit(t *testing.T) {
 	api := &mockTeamsAPI{
 		messages: []model.RemoteMessage{
 			{
-				MessageID:    "msg-edit-v2",
-				SequenceID:   "100",
-				SenderID:     "8:orgid:alice-uuid",
-				Body:         "updated body",
-				MessageType:  "RichText/Html",
+				MessageID:     "msg-edit-v2",
+				SequenceID:    "100",
+				SenderID:      "8:orgid:alice-uuid",
+				Body:          "updated body",
+				MessageType:   "RichText/Html",
 				SkypeEditedID: "msg-edit-v1",
-				Timestamp:    time.Now(),
+				Timestamp:     time.Now(),
 			},
 		},
 	}
@@ -743,7 +743,7 @@ func TestHandleMatrixMessage_SendsText(t *testing.T) {
 
 	msg := &bridgev2.MatrixMessage{
 		MatrixEventBase: bridgev2.MatrixEventBase[*event.MessageEventContent]{
-			Event:   newTestEvent(),
+			Event: newTestEvent(),
 			Content: &event.MessageEventContent{
 				MsgType: event.MsgText,
 				Body:    "hello from matrix",
@@ -787,7 +787,7 @@ func TestHandleMatrixMessage_SendsHTMLWhenFormatted(t *testing.T) {
 
 	msg := &bridgev2.MatrixMessage{
 		MatrixEventBase: bridgev2.MatrixEventBase[*event.MessageEventContent]{
-			Event:   newTestEvent(),
+			Event: newTestEvent(),
 			Content: &event.MessageEventContent{
 				MsgType:       event.MsgText,
 				Body:          "bold text",
@@ -821,7 +821,7 @@ func TestHandleMatrixMessage_SendsReply(t *testing.T) {
 
 	msg := &bridgev2.MatrixMessage{
 		MatrixEventBase: bridgev2.MatrixEventBase[*event.MessageEventContent]{
-			Event:   newTestEvent(),
+			Event: newTestEvent(),
 			Content: &event.MessageEventContent{
 				MsgType: event.MsgText,
 				Body:    "reply text",
@@ -1010,7 +1010,7 @@ func TestHandleMatrixTyping(t *testing.T) {
 	c := newTestClient(api, sink)
 
 	msg := &bridgev2.MatrixTyping{
-		Portal: newTestPortal(networkid.PortalID(testThreadID), ""),
+		Portal:   newTestPortal(networkid.PortalID(testThreadID), ""),
 		IsTyping: true,
 	}
 
@@ -1035,7 +1035,7 @@ func TestHandleMatrixTyping_NotTypingIsNoop(t *testing.T) {
 	c := newTestClient(api, sink)
 
 	msg := &bridgev2.MatrixTyping{
-		Portal: newTestPortal(networkid.PortalID(testThreadID), ""),
+		Portal:   newTestPortal(networkid.PortalID(testThreadID), ""),
 		IsTyping: false,
 	}
 
@@ -1066,7 +1066,7 @@ func TestHandleMatrixMessage_NotLoggedIn(t *testing.T) {
 	msg := &bridgev2.MatrixMessage{
 		MatrixEventBase: bridgev2.MatrixEventBase[*event.MessageEventContent]{
 			Content: &event.MessageEventContent{MsgType: event.MsgText, Body: "test"},
-			Portal: newTestPortal(networkid.PortalID(testThreadID), ""),
+			Portal:  newTestPortal(networkid.PortalID(testThreadID), ""),
 		},
 	}
 

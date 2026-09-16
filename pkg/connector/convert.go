@@ -135,28 +135,14 @@ func (c *TeamsClient) convertTeamsMessage(ctx context.Context, portal *bridgev2.
 		}
 	}
 
-	// Apply thread relation for channel threaded replies.
-	if threadRoot := strings.TrimSpace(msg.ThreadRootID); threadRoot != "" {
-		threadRelation := map[string]any{
-			"rel_type":       "m.thread",
-			"event_id":       "$thread:" + threadRoot,
-			"is_falling_back": true,
-		}
-		if replyTo := strings.TrimSpace(msg.ReplyToID); replyTo != "" {
-			threadRelation["m.in_reply_to"] = map[string]any{
-				"event_id": "$reply:" + replyTo,
-			}
-		}
-		// Attach to the first part.
-		if len(parts) > 0 {
-			if parts[0].Extra == nil {
-				parts[0].Extra = make(map[string]any)
-			}
-			parts[0].Extra["m.relates_to"] = threadRelation
-		}
-	}
-
 	cm := &bridgev2.ConvertedMessage{Parts: parts}
+	// Channel threaded replies: hand the Teams root message ID to bridgev2,
+	// which resolves it to the real Matrix event ID (or a deterministic one
+	// during backfill) and emits the m.thread relation itself.
+	if threadRoot := strings.TrimSpace(msg.ThreadRootID); threadRoot != "" && threadRoot != strings.TrimSpace(msg.MessageID) {
+		root := networkid.MessageID(threadRoot)
+		cm.ThreadRoot = &root
+	}
 	if replyTo := strings.TrimSpace(msg.ReplyToID); replyTo != "" {
 		cm.ReplyTo = &networkid.MessageOptionalPartID{
 			MessageID: networkid.MessageID(replyTo),

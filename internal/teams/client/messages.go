@@ -687,15 +687,15 @@ func (c *Client) EditMessage(ctx context.Context, threadID string, messageID str
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	payload := map[string]interface{}{
-		"type":            "Message",
-		"conversationid":  threadID,
-		"content":         newHTMLContent,
-		"messagetype":     "RichText/Html",
-		"contenttype":     "Text",
-		"composetime":     now,
-		"skypeeditedid":   messageID,
-		"from":            fromUserID,
-		"fromUserId":      fromUserID,
+		"type":           "Message",
+		"conversationid": threadID,
+		"content":        newHTMLContent,
+		"messagetype":    "RichText/Html",
+		"contenttype":    "Text",
+		"composetime":    now,
+		"skypeeditedid":  messageID,
+		"from":           fromUserID,
+		"fromUserId":     fromUserID,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

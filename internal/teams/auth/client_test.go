@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -41,7 +42,7 @@ func TestAuthorizeURL(t *testing.T) {
 	if q.Get("state") != "state123" {
 		t.Fatalf("unexpected state: %s", q.Get("state"))
 	}
-	if q.Get("scope") != "openid profile offline_access https://graph.microsoft.com/Files.ReadWrite" {
+	if q.Get("scope") != strings.Join(defaultScopes, " ") {
 		t.Fatalf("unexpected scope: %s", q.Get("scope"))
 	}
 }

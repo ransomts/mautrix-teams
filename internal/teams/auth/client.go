@@ -9,6 +9,11 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// DefaultHTTPTimeout bounds ordinary API requests (token exchange, message
+// listing, uploads). Long-poll requests must not use it; see
+// client.LongPoll, which derives a client without a global timeout.
+const DefaultHTTPTimeout = 60 * time.Second
+
 const (
 	defaultAuthorizeEndpoint  = "https://login.live.com/oauth20_authorize.srf"
 	defaultTokenEndpoint      = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
@@ -56,7 +61,7 @@ func NewClient(store *CookieStore) *Client {
 	httpClient := &http.Client{
 		Jar:       jar,
 		Transport: &trackingTransport{base: transport, store: store},
-		Timeout:   20 * time.Second,
+		Timeout:   DefaultHTTPTimeout,
 	}
 	logger := zerolog.Nop()
 

@@ -275,7 +275,7 @@ func TestHandleMatrixRoomTopic_Error(t *testing.T) {
 	portal := newTestPortal(networkid.PortalID(testThreadID), "!room:test")
 	msg := &bridgev2.MatrixRoomTopic{
 		MatrixEventBase: bridgev2.MatrixEventBase[*event.TopicEventContent]{
-			Portal: portal,
+			Portal:  portal,
 			Content: &event.TopicEventContent{Topic: "New Topic"},
 		},
 	}

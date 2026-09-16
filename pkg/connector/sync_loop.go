@@ -18,6 +18,11 @@ import (
 const (
 	threadDiscoveryInterval = 30 * time.Second
 	selfMessageTTL          = 5 * time.Minute
+	// longPollRetryDelay is how long to wait after a failed long-poll request.
+	longPollRetryDelay = 2 * time.Second
+	// presenceInitialDelay lets thread discovery populate known users before
+	// the first presence poll.
+	presenceInitialDelay = 10 * time.Second
 )
 
 func (c *TeamsClient) startSyncLoop() {
@@ -145,7 +150,11 @@ func (c *TeamsClient) longPollLoop(ctx context.Context, initialDiscoverySucceede
 				return err
 			}
 			log.Warn().Err(err).Msg("Long-poll request failed, will retry")
-			time.Sleep(2 * time.Second)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(longPollRetryDelay):
+			}
 			continue
 		}
 
@@ -175,7 +184,6 @@ func (c *TeamsClient) longPollLoop(ctx context.Context, initialDiscoverySucceede
 }
 
 func (c *TeamsClient) presenceLoop(ctx context.Context) {
-	log := zerolog.Ctx(ctx)
 	ticker := time.NewTicker(presencePollInterval)
 	defer ticker.Stop()
 
@@ -183,7 +191,7 @@ func (c *TeamsClient) presenceLoop(ctx context.Context) {
 	select {
 	case <-ctx.Done():
 		return
-	case <-time.After(10 * time.Second):
+	case <-time.After(presenceInitialDelay):
 		c.pollPresence(ctx)
 	}
 
@@ -199,7 +207,6 @@ func (c *TeamsClient) presenceLoop(ctx context.Context) {
 			}
 		}
 	}
-	_ = log // suppress unused warning if needed
 }
 
 func (c *TeamsClient) syncOnce(ctx context.Context) error {
@@ -258,7 +265,7 @@ func (c *TeamsClient) ensureValidSkypeToken(ctx context.Context) error {
 	// is best-effort and should not affect skypetoken acquisition.
 	// The MBI scope only works on the /common endpoint, not tenant-specific ones.
 	authClient.Scopes = []string{mbiRefreshScope}
-	authClient.TokenEndpoint = mbiTokenEndpoint
+	authClient.TokenEndpoint = mbiTokenEndpointFor(authClient.TokenEndpoint)
 
 	state, err := authClient.RefreshAccessToken(ctx, refresh)
 	if err != nil {

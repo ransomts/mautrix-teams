@@ -88,11 +88,11 @@ func TestConvertTeamsEditNoExistingParts(t *testing.T) {
 
 func TestStripHTMLFallback(t *testing.T) {
 	cases := map[string]string{
-		"<p>hello</p>":              "hello",
-		"line1<br>line2":            "line1\nline2",
-		"line1<br/>line2":           "line1\nline2",
-		"line1<br />line2":          "line1\nline2",
-		"<p>a</p><p>b<br>c</p>":    "ab\nc",
+		"<p>hello</p>":          "hello",
+		"line1<br>line2":        "line1\nline2",
+		"line1<br/>line2":       "line1\nline2",
+		"line1<br />line2":      "line1\nline2",
+		"<p>a</p><p>b<br>c</p>": "ab\nc",
 	}
 	for input, expected := range cases {
 		got := stripHTMLFallback(input)
@@ -104,10 +104,10 @@ func TestStripHTMLFallback(t *testing.T) {
 
 func TestPlainTextToHTML(t *testing.T) {
 	cases := map[string]string{
-		"hello":                "hello",
-		"line1\nline2":         "line1<br>line2",
+		"hello":                  "hello",
+		"line1\nline2":           "line1<br>line2",
 		"<script>alert</script>": "&lt;script&gt;alert&lt;/script&gt;",
-		"a & b":                "a &amp; b",
+		"a & b":                  "a &amp; b",
 	}
 	for input, expected := range cases {
 		got := plainTextToHTML(input)
@@ -139,12 +139,12 @@ func TestDetectMIMEType(t *testing.T) {
 
 func TestMatrixMsgTypeForMIME(t *testing.T) {
 	cases := map[string]event.MessageType{
-		"image/png":            event.MsgImage,
-		"image/jpeg":           event.MsgImage,
-		"video/mp4":            event.MsgVideo,
-		"audio/mpeg":           event.MsgAudio,
-		"application/pdf":      event.MsgFile,
-		"application/zip":      event.MsgFile,
+		"image/png":       event.MsgImage,
+		"image/jpeg":      event.MsgImage,
+		"video/mp4":       event.MsgVideo,
+		"audio/mpeg":      event.MsgAudio,
+		"application/pdf": event.MsgFile,
+		"application/zip": event.MsgFile,
 	}
 	for mime, expected := range cases {
 		got := matrixMsgTypeForMIME(mime)

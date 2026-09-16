@@ -39,7 +39,7 @@ type skypeTokenResponse struct {
 	// Consumer endpoint nests under "skypeToken"
 	SkypeToken skypeTokenInner `json:"skypeToken"`
 	// Enterprise endpoint nests under "tokens"
-	Tokens     skypeTokenInner    `json:"tokens"`
+	Tokens     skypeTokenInner      `json:"tokens"`
 	RegionGtms skypeTokenRegionGtms `json:"regionGtms"`
 }
 

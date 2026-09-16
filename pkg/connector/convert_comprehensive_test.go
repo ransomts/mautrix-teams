@@ -18,13 +18,13 @@ import (
 
 func TestConvertTeamsMessage(t *testing.T) {
 	tests := []struct {
-		name           string
-		msg            model.RemoteMessage
-		wantMsgType    event.MessageType
+		name             string
+		msg              model.RemoteMessage
+		wantMsgType      event.MessageType
 		wantBodyContains string
 		wantHTMLContains string
-		wantParts      int
-		wantReplyTo    string
+		wantParts        int
+		wantReplyTo      string
 	}{
 		{
 			name: "plain text message",
@@ -211,9 +211,9 @@ func TestConvertCallOrMeetingEvent(t *testing.T) {
 
 func TestExtractMeetingJoinURL_Table(t *testing.T) {
 	tests := []struct {
-		name  string
-		body  string
-		want  string
+		name string
+		body string
+		want string
 	}{
 		{
 			name: "URL in text",
@@ -253,9 +253,9 @@ func TestExtractMeetingJoinURL_Table(t *testing.T) {
 
 func TestApplyVoiceMessageHint(t *testing.T) {
 	tests := []struct {
-		name     string
-		filename string
-		mime     string
+		name      string
+		filename  string
+		mime      string
 		wantVoice bool
 	}{
 		{"voice in filename", "voice_message_001.ogg", "audio/ogg", true},
@@ -401,16 +401,16 @@ func TestConvertTeamsMessage_ThreadRelation(t *testing.T) {
 
 func TestPerMessageExtra(t *testing.T) {
 	tests := []struct {
-		name       string
-		msg        model.RemoteMessage
-		wantNil    bool
-		wantID     string
-		wantName   string
+		name     string
+		msg      model.RemoteMessage
+		wantNil  bool
+		wantID   string
+		wantName string
 	}{
 		{
-			name:    "with sender info",
-			msg:     model.RemoteMessage{SenderID: "8:orgid:alice", SenderName: "Alice"},
-			wantID:  "8:orgid:alice",
+			name:     "with sender info",
+			msg:      model.RemoteMessage{SenderID: "8:orgid:alice", SenderName: "Alice"},
+			wantID:   "8:orgid:alice",
 			wantName: "Alice",
 		},
 		{
@@ -502,12 +502,12 @@ func TestRewriteAMSURL(t *testing.T) {
 
 func TestMimeExtension(t *testing.T) {
 	tests := map[string]string{
-		"image/png":     ".png",
-		"image/jpeg":    ".jpg",
-		"image/gif":     ".gif",
-		"image/webp":    ".webp",
-		"text/plain":    "",
-		"":              "",
+		"image/png":  ".png",
+		"image/jpeg": ".jpg",
+		"image/gif":  ".gif",
+		"image/webp": ".webp",
+		"text/plain": "",
+		"":           "",
 	}
 	for mime, want := range tests {
 		got := mimeExtension(mime)

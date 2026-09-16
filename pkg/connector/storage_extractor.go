@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"go.mau.fi/mautrix-teams/internal/teams/auth"
@@ -12,8 +13,28 @@ import (
 	"maunium.net/go/mautrix/bridgev2"
 )
 
-const mbiRefreshScope = "service::api.fl.spaces.skype.com::MBI_SSL"
+const mbiRefreshScope = "service::api.fl.spaces.skype.com::MBI_SSL offline_access"
 const mbiTokenEndpoint = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+
+// mbiTokenEndpointFor returns the endpoint to use for MBI-scope refreshes.
+// The MBI scope is only accepted on the /common endpoint, so real Microsoft
+// endpoints (tenant-specific, /consumers, /organizations) are rewritten to it.
+// Any other endpoint (a test server, a proxy) is left untouched.
+func mbiTokenEndpointFor(configured string) string {
+	trimmed := strings.TrimSpace(configured)
+	if trimmed == "" {
+		return mbiTokenEndpoint
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return mbiTokenEndpoint
+	}
+	if strings.EqualFold(parsed.Host, "login.microsoftonline.com") {
+		return mbiTokenEndpoint
+	}
+	return trimmed
+}
+
 const graphFilesReadWriteScope = "https://graph.microsoft.com/Files.ReadWrite"
 const graphTeamReadScope = "https://graph.microsoft.com/Team.ReadBasic.All"
 const graphChannelReadScope = "https://graph.microsoft.com/Channel.ReadBasic.All"
@@ -98,7 +119,7 @@ func refreshAccessTokenForSkypeScope(ctx context.Context, client *auth.Client, r
 	// The MBI scope only works on the /common endpoint, not tenant-specific ones.
 	retryClient := *client
 	retryClient.Scopes = []string{mbiRefreshScope}
-	retryClient.TokenEndpoint = mbiTokenEndpoint
+	retryClient.TokenEndpoint = mbiTokenEndpointFor(client.TokenEndpoint)
 	refreshed, err := retryClient.RefreshAccessToken(ctx, refreshToken)
 	if err == nil {
 		return refreshed, nil
