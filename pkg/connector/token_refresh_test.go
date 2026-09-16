@@ -139,3 +139,91 @@ func TestEnsureValidSkypeTokenRefreshUpdatesCachedConsumer(t *testing.T) {
 		t.Fatalf("client should report logged in after a successful refresh")
 	}
 }
+
+func TestEnsureValidSkypeTokenDeviceCodeLoginRefreshesWithOwnScope(t *testing.T) {
+	var gotScope, gotClientID, gotPath string
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotPath = r.URL.Path
+		gotScope = r.Form.Get("scope")
+		gotClientID = r.Form.Get("client_id")
+		_, _ = w.Write([]byte(`{"access_token":"spaces-access","refresh_token":"rotated","expires_in":3600}`))
+	}))
+	defer tokenServer.Close()
+	skypeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer spaces-access" {
+			t.Errorf("skypetoken request used %q", got)
+		}
+		_, _ = w.Write([]byte(`{"skypeToken":{"skypetoken":"fresh-skype","expiresIn":86400,"skypeid":"orgid:abc"}}`))
+	}))
+	defer skypeServer.Close()
+
+	origFactory := newAuthClient
+	newAuthClient = func(store *auth.CookieStore) *auth.Client {
+		client := auth.NewClient(store)
+		// Global config would point at /common for MBI refreshes; the
+		// per-login endpoint below must win for device code logins.
+		client.TokenEndpoint = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+		return client
+	}
+	defer func() { newAuthClient = origFactory }()
+
+	c := &TeamsClient{
+		Login: &bridgev2.UserLogin{UserLogin: &database.UserLogin{}},
+		Meta: &teamsid.UserLoginMetadata{
+			LoginMethod:         LoginMethodDeviceCode,
+			ClientID:            "public-client",
+			RefreshScope:        DefaultDeviceCodeScope,
+			TokenEndpoint:       tokenServer.URL + "/tenant/oauth2/v2.0/token",
+			SkypeTokenEndpoint:  skypeServer.URL,
+			RefreshToken:        "rt-device",
+			SkypeToken:          "stale",
+			SkypeTokenExpiresAt: time.Now().Add(-time.Hour).Unix(),
+		},
+	}
+	if err := c.ensureValidSkypeToken(context.Background()); err != nil {
+		t.Fatalf("refresh failed: %v", err)
+	}
+	if gotPath != "/tenant/oauth2/v2.0/token" {
+		t.Fatalf("refresh should hit the per-login tenant endpoint, got %q", gotPath)
+	}
+	if gotScope != DefaultDeviceCodeScope {
+		t.Fatalf("refresh should use the login's scope, got %q", gotScope)
+	}
+	if gotClientID != "public-client" {
+		t.Fatalf("refresh should use the login's client id, got %q", gotClientID)
+	}
+	if c.Meta.SkypeToken != "fresh-skype" || c.Meta.RefreshToken != "rotated" {
+		t.Fatalf("metadata not updated: %+v", c.Meta)
+	}
+}
+
+func TestEnsureValidGraphTokenDeviceCodeLoginUsesGraphScope(t *testing.T) {
+	var gotScope string
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotScope = r.Form.Get("scope")
+		_, _ = w.Write([]byte(`{"access_token":"graph-access","refresh_token":"rotated","expires_in":3600}`))
+	}))
+	defer tokenServer.Close()
+
+	c := &TeamsClient{
+		Login: &bridgev2.UserLogin{UserLogin: &database.UserLogin{}},
+		Meta: &teamsid.UserLoginMetadata{
+			LoginMethod:   LoginMethodDeviceCode,
+			ClientID:      "public-client",
+			RefreshScope:  DefaultDeviceCodeScope,
+			TokenEndpoint: tokenServer.URL,
+			RefreshToken:  "rt-device",
+		},
+	}
+	if err := c.ensureValidGraphToken(context.Background()); err != nil {
+		t.Fatalf("graph refresh failed: %v", err)
+	}
+	if gotScope != DefaultDeviceCodeGraphScope {
+		t.Fatalf("graph refresh should use the device code graph scope, got %q", gotScope)
+	}
+	if c.Meta.GraphAccessToken != "graph-access" || c.Meta.GraphExpiresAt == 0 {
+		t.Fatalf("graph token not stored: %+v", c.Meta)
+	}
+}

@@ -82,8 +82,15 @@ func (c *Client) tokenRequest(ctx context.Context, values url.Values) (*AuthStat
 		return nil, fmt.Errorf("token endpoint returned non-2xx status: %d body=%s", resp.StatusCode, snippet)
 	}
 
+	return parseTokenResponse(resp.Body, values.Get("scope"))
+}
+
+// parseTokenResponse decodes a successful token endpoint body into an
+// AuthState. requestedScope decides whether the access token is also recorded
+// as a Graph token (see shouldPersistGraphToken).
+func parseTokenResponse(body io.Reader, requestedScope string) (*AuthState, error) {
 	var payload tokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := json.NewDecoder(body).Decode(&payload); err != nil {
 		return nil, err
 	}
 	if payload.AccessToken == "" {
@@ -96,11 +103,11 @@ func (c *Client) tokenRequest(ctx context.Context, values url.Values) (*AuthStat
 	}
 	if payload.ExpiresIn > 0 {
 		state.ExpiresAtUnix = time.Now().Add(time.Duration(payload.ExpiresIn) * time.Second).UTC().Unix()
-		if shouldPersistGraphToken(values.Get("scope")) {
+		if shouldPersistGraphToken(requestedScope) {
 			state.GraphAccessToken = payload.AccessToken
 			state.GraphExpiresAt = state.ExpiresAtUnix
 		}
-	} else if shouldPersistGraphToken(values.Get("scope")) {
+	} else if shouldPersistGraphToken(requestedScope) {
 		state.GraphAccessToken = payload.AccessToken
 	}
 	return state, nil

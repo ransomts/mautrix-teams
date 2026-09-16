@@ -27,7 +27,7 @@ func (c *TeamsClient) ensureValidGraphToken(ctx context.Context) error {
 
 	authClient := newConfiguredAuthClientForLogin(c.Main, c.Meta)
 
-	refreshed, err := refreshAccessTokenForGraphScope(ctx, authClient, refreshToken)
+	refreshed, err := refreshAccessTokenForGraphScopeWithMeta(ctx, authClient, refreshToken, c.Main, c.Meta)
 	if err != nil {
 		c.graphRefreshFail.record(now, err)
 		return err

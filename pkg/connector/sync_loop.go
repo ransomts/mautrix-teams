@@ -321,11 +321,17 @@ func (c *TeamsClient) ensureValidSkypeToken(ctx context.Context) error {
 	}
 
 	authClient := newConfiguredAuthClientForLogin(c.Main, c.Meta)
-	// Keep this refresh scoped for skypetoken bootstrap. Graph token persistence
-	// is best-effort and should not affect skypetoken acquisition.
-	// The MBI scope only works on the /common endpoint, not tenant-specific ones.
-	authClient.Scopes = []string{mbiRefreshScope}
-	authClient.TokenEndpoint = mbiTokenEndpointFor(authClient.TokenEndpoint)
+	if scope := strings.TrimSpace(c.Meta.RefreshScope); scope != "" {
+		// Device code logins refresh with their own scope against the
+		// configured (tenant) token endpoint.
+		authClient.Scopes = strings.Fields(scope)
+	} else {
+		// Keep this refresh scoped for skypetoken bootstrap. Graph token persistence
+		// is best-effort and should not affect skypetoken acquisition.
+		// The MBI scope only works on the /common endpoint, not tenant-specific ones.
+		authClient.Scopes = []string{mbiRefreshScope}
+		authClient.TokenEndpoint = mbiTokenEndpointFor(authClient.TokenEndpoint)
+	}
 
 	state, err := authClient.RefreshAccessToken(ctx, refresh)
 	if err != nil {

@@ -136,6 +136,18 @@ func refreshAccessTokenForSkypeScope(ctx context.Context, client *auth.Client, r
 	return nil, fmt.Errorf("MBI scope refresh failed (%v); default scopes failed (%v)", err, fallbackErr)
 }
 
+// refreshAccessTokenForGraphScopeWithMeta refreshes a Graph token. Device
+// code logins use the configured Graph scope against the tenant endpoint;
+// localStorage logins keep the legacy scope fallbacks.
+func refreshAccessTokenForGraphScopeWithMeta(ctx context.Context, client *auth.Client, refreshToken string, main *TeamsConnector, meta *teamsid.UserLoginMetadata) (*auth.AuthState, error) {
+	if meta != nil && strings.TrimSpace(meta.RefreshScope) != "" {
+		graphClient := *client
+		graphClient.Scopes = strings.Fields(main.deviceCodeGraphScope())
+		return graphClient.RefreshAccessToken(ctx, refreshToken)
+	}
+	return refreshAccessTokenForGraphScope(ctx, client, refreshToken)
+}
+
 func refreshAccessTokenForGraphScope(ctx context.Context, client *auth.Client, refreshToken string) (*auth.AuthState, error) {
 	retryClient := *client
 	retryClient.Scopes = []string{graphFilesReadWriteScope, graphTeamReadScope, graphChannelReadScope}
@@ -191,6 +203,9 @@ func newConfiguredAuthClientForLogin(main *TeamsConnector, meta *teamsid.UserLog
 	}
 	// Per-login overrides take precedence over global config.
 	if meta != nil {
+		if id := strings.TrimSpace(meta.ClientID); id != "" {
+			client.ClientID = id
+		}
 		if ep := strings.TrimSpace(meta.AuthorizeEndpoint); ep != "" {
 			client.AuthorizeEndpoint = ep
 		}

@@ -45,6 +45,17 @@ type UserLoginMetadata struct {
 	RegionChatServiceURL string `json:"region_chat_service_url,omitempty"`
 	RegionAmsURL         string `json:"region_ams_url,omitempty"`
 
+	// How this login was created: "device_code" for the OAuth device
+	// authorization grant, empty for tokens lifted from Teams web localStorage.
+	LoginMethod string `json:"login_method,omitempty"`
+	// OAuth public client the refresh token belongs to. Empty means the Teams
+	// web app client from config/auth defaults (localStorage logins).
+	ClientID string `json:"client_id,omitempty"`
+	// Scope string sent on refresh_token grants for this login. When set, the
+	// refresh path uses it (with the configured tenant token endpoint) instead
+	// of the legacy MBI scope on /common.
+	RefreshScope string `json:"refresh_scope,omitempty"`
+
 	// Per-login tenant overrides. When set, these take precedence over the
 	// global connector config, allowing multiple tenants on one bridge instance.
 	TenantID           string `json:"tenant_id,omitempty"`

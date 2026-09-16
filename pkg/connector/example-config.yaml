@@ -17,6 +17,24 @@ skype_token_endpoint: ""
 # https://teams.microsoft.com/go
 # Leave empty to use the default (consumer accounts).
 redirect_uri: ""
+# OAuth public client used by the "device code" login flow. It must be a public
+# client that the tenant allows to use the device authorization grant. Leave
+# empty for the Microsoft Teams desktop client (1fec8e78-bce4-4aaf-ab1b-5451cc387264).
+# The device code flow issues a refresh token with the tenant's normal sliding
+# lifetime (90 days by default) instead of the 24-hour token of the browser
+# localStorage flows. For enterprise accounts token_endpoint above must be the
+# tenant-specific endpoint.
+device_code_client_id: ""
+# Scope requested by the device code login and sent on every refresh for such
+# logins. The access token must be one the skypetoken endpoint (authsvc)
+# accepts. Leave empty for
+# "https://api.spaces.skype.com/Authorization.ReadWrite offline_access openid profile".
+device_code_scope: ""
+# Scope used to obtain a Microsoft Graph token with the device code refresh
+# token (avatars, presence, file uploads). Best-effort: login succeeds without
+# it. Leave empty for the Files.ReadWrite, Team.ReadBasic.All,
+# Channel.ReadBasic.All and Presence.Read.All Graph scopes.
+device_code_graph_scope: ""
 # Sync mode controls how the bridge receives Teams events.
 # "poll" (default): short-polling with adaptive backoff.
 # "longpoll": long-polling via Teams Consumer API for lower latency.
