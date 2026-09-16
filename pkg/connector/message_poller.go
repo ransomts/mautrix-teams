@@ -128,6 +128,13 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 	if c == nil || th == nil {
 		return 0, nil
 	}
+	// Teams system streams (drafts, annotations, notifications, call logs,
+	// mentions, threads) are not conversations and reject message polling with
+	// HTTP 400 "Invalid threadId". Skip them; "notes" is a real chat and polls
+	// normally.
+	if isNonPollableSystemStream(th.ThreadID) || isNonPollableSystemStream(th.Conversation) {
+		return 0, nil
+	}
 	log := c.log()
 	if err := c.ensureValidSkypeToken(ctx); err != nil {
 		c.Login.BridgeState.Send(status.BridgeState{StateEvent: status.StateBadCredentials, Message: err.Error(), UserAction: status.UserActionRelogin})
@@ -311,6 +318,13 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 	}
 	_ = c.pollConsumptionHorizons(ctx, th, now)
 	return ingested, nil
+}
+
+// isNonPollableSystemStream reports whether id is a Teams internal pseudo-stream
+// that cannot be polled for messages. "teamsstream_notes" (the self-chat) is a
+// real conversation and is excluded.
+func isNonPollableSystemStream(id string) bool {
+	return strings.Contains(id, "teamsstream_") && !strings.Contains(id, "teamsstream_notes")
 }
 
 // shouldEmitTyping returns true if a typing event should be emitted for this

@@ -535,11 +535,22 @@ func plaintextToTeamsHTML(text string) string {
 // understand (the bridge sends replies via its own reply mechanism).
 var mxReplyRe = regexp.MustCompile(`(?is)<mx-reply>.*?</mx-reply>`)
 
-// matrixHTMLToTeamsHTML adapts a Matrix formatted_body into Teams HTML. Both
-// use the same tag vocabulary, so it passes the markup through, stripping only
-// the mx-reply fallback and trimming surrounding whitespace.
+// underlineSpanRe matches the underline span that Org (ement's send filter)
+// and some Matrix clients emit. Teams has no stylesheet, so class="underline"
+// is invisible; it must become a <u> tag.
+var underlineSpanRe = regexp.MustCompile(`(?is)<span class="underline">(.*?)</span>`)
+
+// matrixHTMLToTeamsHTML adapts a Matrix formatted_body into Teams HTML. Matrix,
+// Org and Teams share a tag vocabulary (b/strong, i/em, u, del/s, code, pre, a,
+// ul/ol/li, blockquote, br, p), so the markup passes through; only constructs
+// Teams cannot render are converted:
+//   - the mx-reply fallback block is stripped (replies use Teams' own mechanism)
+//   - <span class="underline"> becomes <u> (Teams has no CSS for the class)
+//
+// Links, lists, code blocks and blockquotes already render in Teams as-is.
 func matrixHTMLToTeamsHTML(formattedBody string) string {
 	out := mxReplyRe.ReplaceAllString(formattedBody, "")
+	out = underlineSpanRe.ReplaceAllString(out, "<u>$1</u>")
 	return strings.TrimSpace(out)
 }
 
