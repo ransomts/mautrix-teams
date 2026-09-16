@@ -23,6 +23,9 @@ var emotionKeyAliases = map[string]string{
 	"heavycheckmark":      "✔️",
 	"hundredpointssymbol": "💯",
 	"laughcry":            "😂",
+	"hearteyes":           "😍",
+	"ghost":               "👻",
+	"fistbump":            "👊",
 }
 
 var skinToneSuffixes = map[string]string{
