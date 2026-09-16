@@ -174,10 +174,32 @@ var emojiToEmotionKey = map[string]string{
 	variationselector.FullyQualify("🥷"):    "ninja",
 }
 
+// hasSkinToneModifier reports whether s contains a Fitzpatrick skin-tone
+// modifier (U+1F3FB..U+1F3FF).
+func hasSkinToneModifier(s string) bool {
+	for _, r := range s {
+		if r >= 0x1F3FB && r <= 0x1F3FF {
+			return true
+		}
+	}
+	return false
+}
+
+// emotionKeyToEmoji inverts emojiToEmotionKey. Several emoji can map to one
+// key (e.g. 👍 and 👍🏻 both -> "like"); pick deterministically, preferring an
+// emoji without a skin-tone modifier, then the lexicographically smallest, so
+// the inbound rendering does not depend on Go map iteration order.
 var emotionKeyToEmoji = func() map[string]string {
 	inverse := make(map[string]string, len(emojiToEmotionKey))
 	for emoji, key := range emojiToEmotionKey {
-		if _, exists := inverse[key]; !exists {
+		best, exists := inverse[key]
+		if !exists {
+			inverse[key] = emoji
+			continue
+		}
+		better := hasSkinToneModifier(best) && !hasSkinToneModifier(emoji)
+		same := hasSkinToneModifier(best) == hasSkinToneModifier(emoji)
+		if better || (same && emoji < best) {
 			inverse[key] = emoji
 		}
 	}
