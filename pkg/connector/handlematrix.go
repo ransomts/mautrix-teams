@@ -67,7 +67,13 @@ func (c *TeamsClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 		}
 		body, mentionProps := c.convertMatrixMentionsToTeams(body)
 		replyToID := ""
-		if msg.ReplyTo != nil && msg.ReplyTo.ID != "" {
+		if isChannelThread(threadID) {
+			// Teams channel messages are organised into threads. Post the reply
+			// into the thread by setting replyChainMessageId to the thread root
+			// (not the specific message replied to); no quote blockquote.
+			replyToID = resolveTeamsThreadRoot(msg)
+		} else if msg.ReplyTo != nil && msg.ReplyTo.ID != "" {
+			// DMs and group chats: quote-reply with a Skype reply blockquote.
 			replyToID = string(msg.ReplyTo.ID)
 			body = c.buildTeamsReplyHTML(ctx, threadID, replyToID, body)
 		}
@@ -388,6 +394,34 @@ func (c *TeamsClient) sendOutboundAttachment(ctx context.Context, roomMXID id.Ro
 
 // wrapTeamsSendError wraps consumer client errors in bridgev2.MessageStatus
 // to provide structured delivery feedback to the Matrix user.
+// isChannelThread reports whether threadID is a Teams channel (whose messages
+// are threaded), as opposed to a 1:1 or group chat.
+func isChannelThread(threadID string) bool {
+	return strings.Contains(threadID, "@thread.tacv2")
+}
+
+// resolveTeamsThreadRoot returns the Teams message id of the thread the reply
+// belongs to: the Matrix thread root if present, else the replied-to message's
+// stored thread root, else the replied-to message itself. Empty when the reply
+// has no resolvable target (a new top-level post, which Teams threads on its own).
+func resolveTeamsThreadRoot(msg *bridgev2.MatrixMessage) string {
+	if msg == nil {
+		return ""
+	}
+	if msg.ThreadRoot != nil && msg.ThreadRoot.ID != "" {
+		return string(msg.ThreadRoot.ID)
+	}
+	if msg.ReplyTo != nil {
+		if msg.ReplyTo.ThreadRoot != "" {
+			return string(msg.ReplyTo.ThreadRoot)
+		}
+		if msg.ReplyTo.ID != "" {
+			return string(msg.ReplyTo.ID)
+		}
+	}
+	return ""
+}
+
 func wrapTeamsSendError(err error) error {
 	var sendErr consumerclient.SendMessageError
 	if errors.As(err, &sendErr) {
