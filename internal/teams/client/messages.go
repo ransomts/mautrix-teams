@@ -355,6 +355,18 @@ func (c *Client) SendReplyWithMentions(ctx context.Context, threadID string, tex
 	return c.sendReplyMessage(ctx, threadID, formatHTMLContent(text), fromUserID, clientMessageID, replyToID, mentions)
 }
 
+// SendFormattedMessage sends pre-formatted Teams HTML without escaping it,
+// dispatching to the reply, mention or plain send path per the arguments.
+func (c *Client) SendFormattedMessage(ctx context.Context, threadID string, htmlContent string, fromUserID string, clientMessageID string, replyToID string, mentions []map[string]any) (int, error) {
+	if strings.TrimSpace(replyToID) != "" {
+		return c.sendReplyMessage(ctx, threadID, htmlContent, fromUserID, clientMessageID, replyToID, mentions)
+	}
+	if len(mentions) > 0 {
+		return c.sendRichTextMessageWithMentions(ctx, threadID, htmlContent, fromUserID, clientMessageID, mentions)
+	}
+	return c.sendHTMLMessageWithID(ctx, threadID, htmlContent, fromUserID, clientMessageID)
+}
+
 func (c *Client) SendGIFWithID(ctx context.Context, threadID string, gifURL string, title string, fromUserID string, clientMessageID string) (int, error) {
 	return c.sendHTMLMessageWithID(ctx, threadID, formatGIFContent(gifURL, title), fromUserID, clientMessageID)
 }

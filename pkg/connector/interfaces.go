@@ -18,6 +18,9 @@ type TeamsAPI interface {
 	SendMessageWithMentions(ctx context.Context, threadID string, text string, fromUserID string, clientMessageID string, mentions []map[string]any) (int, error)
 	SendReplyWithID(ctx context.Context, threadID string, text string, fromUserID string, clientMessageID string, replyToID string) (int, error)
 	SendReplyWithMentions(ctx context.Context, threadID string, text string, fromUserID string, clientMessageID string, replyToID string, mentions []map[string]any) (int, error)
+	// SendFormattedMessage sends already-formatted Teams HTML as-is (no
+	// escaping), choosing the reply/mention variant from the arguments.
+	SendFormattedMessage(ctx context.Context, threadID string, htmlContent string, fromUserID string, clientMessageID string, replyToID string, mentions []map[string]any) (int, error)
 	SendGIFWithID(ctx context.Context, threadID string, gifURL string, title string, fromUserID string, clientMessageID string) (int, error)
 	SendAttachmentMessageWithID(ctx context.Context, threadID string, htmlContent string, filesProperty string, fromUserID string, clientMessageID string) (int, error)
 	EditMessage(ctx context.Context, threadID string, messageID string, newHTMLContent string, fromUserID string) error

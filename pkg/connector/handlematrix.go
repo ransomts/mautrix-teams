@@ -55,25 +55,23 @@ func (c *TeamsClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 	var err error
 	switch msg.Content.MsgType {
 	case event.MsgText:
-		body := msg.Content.Body
+		// Produce Teams HTML. A Matrix HTML message (e.g. ement's Org filter,
+		// which wraps even plain text in <p>) is already HTML and must not be
+		// escaped, or Teams shows the literal tags; a plain-text message is
+		// escaped and wrapped. Then convert mention pills to Teams spans.
+		var body string
 		if msg.Content.Format == event.FormatHTML && msg.Content.FormattedBody != "" {
-			body = msg.Content.FormattedBody
-		}
-		// Convert Matrix mention pills to Teams mention spans.
-		body, mentionProps := c.convertMatrixMentionsToTeams(body)
-		if msg.ReplyTo != nil && msg.ReplyTo.ID != "" {
-			replyToID := string(msg.ReplyTo.ID)
-			body = c.buildTeamsReplyHTML(ctx, threadID, replyToID, body)
-			if len(mentionProps) > 0 {
-				_, err = api.SendReplyWithMentions(ctx, threadID, body, c.Meta.TeamsUserID, clientMessageID, replyToID, mentionProps)
-			} else {
-				_, err = api.SendReplyWithID(ctx, threadID, body, c.Meta.TeamsUserID, clientMessageID, replyToID)
-			}
-		} else if len(mentionProps) > 0 {
-			_, err = api.SendMessageWithMentions(ctx, threadID, body, c.Meta.TeamsUserID, clientMessageID, mentionProps)
+			body = matrixHTMLToTeamsHTML(msg.Content.FormattedBody)
 		} else {
-			_, err = api.SendMessageWithID(ctx, threadID, body, c.Meta.TeamsUserID, clientMessageID)
+			body = plaintextToTeamsHTML(msg.Content.Body)
 		}
+		body, mentionProps := c.convertMatrixMentionsToTeams(body)
+		replyToID := ""
+		if msg.ReplyTo != nil && msg.ReplyTo.ID != "" {
+			replyToID = string(msg.ReplyTo.ID)
+			body = c.buildTeamsReplyHTML(ctx, threadID, replyToID, body)
+		}
+		_, err = api.SendFormattedMessage(ctx, threadID, body, c.Meta.TeamsUserID, clientMessageID, replyToID, mentionProps)
 	case event.MsgImage:
 		title, gifURL, ok := extractOutboundGIF(msg.Content)
 		if !ok {

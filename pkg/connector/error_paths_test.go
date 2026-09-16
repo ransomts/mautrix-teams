@@ -40,6 +40,10 @@ func (m *errorMockTeamsAPI) SendMessageWithMentions(_ context.Context, _, _, _, 
 	return 0, m.sendErr
 }
 
+func (m *errorMockTeamsAPI) SendFormattedMessage(_ context.Context, _, _, _, _, _ string, _ []map[string]any) (int, error) {
+	return 0, m.sendErr
+}
+
 func (m *errorMockTeamsAPI) EditMessage(_ context.Context, _, _, _, _ string) error {
 	return m.editErr
 }

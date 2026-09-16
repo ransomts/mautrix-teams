@@ -156,6 +156,15 @@ func (m *mockTeamsAPI) SendReplyWithMentions(_ context.Context, threadID, text, 
 	return 200, nil
 }
 
+func (m *mockTeamsAPI) SendFormattedMessage(_ context.Context, threadID, htmlContent, fromUserID, clientMessageID, replyToID string, mentions []map[string]any) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sentMessages = append(m.sentMessages, sentMessage{
+		ThreadID: threadID, Text: htmlContent, FromUserID: fromUserID, ClientMessageID: clientMessageID, Mentions: mentions,
+	})
+	return 200, nil
+}
+
 func (m *mockTeamsAPI) SendGIFWithID(_ context.Context, _, _, _, _, _ string) (int, error) {
 	return 200, nil
 }
@@ -772,8 +781,8 @@ func TestHandleMatrixMessage_SendsText(t *testing.T) {
 	if sent.ThreadID != testThreadID {
 		t.Errorf("expected threadID=%s, got %s", testThreadID, sent.ThreadID)
 	}
-	if sent.Text != "hello from matrix" {
-		t.Errorf("expected text='hello from matrix', got '%s'", sent.Text)
+	if sent.Text != "<p>hello from matrix</p>" {
+		t.Errorf("expected Teams HTML '<p>hello from matrix</p>', got '%s'", sent.Text)
 	}
 	if sent.FromUserID != testSelfUserID {
 		t.Errorf("expected fromUserID=%s, got %s", testSelfUserID, sent.FromUserID)
@@ -845,7 +854,7 @@ func TestHandleMatrixMessage_SendsReply(t *testing.T) {
 	if body == "reply text" {
 		t.Error("reply should wrap body with blockquote, got plain text")
 	}
-	expected := `<blockquote itemtype="http://schema.skype.com/Reply" itemid="original-msg-id"></blockquote>reply text`
+	expected := `<blockquote itemtype="http://schema.skype.com/Reply" itemid="original-msg-id"></blockquote><p>reply text</p>`
 	if body != expected {
 		t.Errorf("unexpected reply body:\n  got:  %s\n  want: %s", body, expected)
 	}

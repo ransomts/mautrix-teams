@@ -521,6 +521,28 @@ func applyMentionPillsWithResolver(ctx context.Context, parts []*bridgev2.Conver
 // convertMatrixMentionsToTeams converts Matrix mention pills in HTML to Teams
 // mention format: <span itemtype="http://schema.skype.com/Mention" itemid="INDEX">@Name</span>
 // and returns the modified body plus a JSON-serializable mentions properties array.
+// plaintextToTeamsHTML escapes a plain-text message and wraps it as Teams HTML,
+// mirroring the Teams web client (newlines become <br>, wrapped in <p>).
+func plaintextToTeamsHTML(text string) string {
+	normalized := strings.ReplaceAll(text, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	escaped := html.EscapeString(normalized)
+	escaped = strings.ReplaceAll(escaped, "\n", "<br>")
+	return "<p>" + escaped + "</p>"
+}
+
+// mxReplyRe matches Matrix's rich-reply fallback block, which Teams does not
+// understand (the bridge sends replies via its own reply mechanism).
+var mxReplyRe = regexp.MustCompile(`(?is)<mx-reply>.*?</mx-reply>`)
+
+// matrixHTMLToTeamsHTML adapts a Matrix formatted_body into Teams HTML. Both
+// use the same tag vocabulary, so it passes the markup through, stripping only
+// the mx-reply fallback and trimming surrounding whitespace.
+func matrixHTMLToTeamsHTML(formattedBody string) string {
+	out := mxReplyRe.ReplaceAllString(formattedBody, "")
+	return strings.TrimSpace(out)
+}
+
 func (c *TeamsClient) convertMatrixMentionsToTeams(body string) (string, []map[string]any) {
 	resolver := c.getGhostResolver()
 	return convertMatrixMentionsToTeamsWithResolver(body, resolver)
