@@ -72,6 +72,10 @@ func (m *errorMockTeamsAPI) RemoveMember(_ context.Context, _, _ string) error {
 	return m.removeMemberErr
 }
 
+func (m *errorMockTeamsAPI) GetThreadMembers(_ context.Context, _ string) ([]string, error) {
+	return nil, errors.New("thread members unavailable")
+}
+
 // newErrorTestClient creates a client with an error-returning mock API.
 func newErrorTestClient(api TeamsAPI) *TeamsClient {
 	c := &TeamsClient{

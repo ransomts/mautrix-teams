@@ -35,6 +35,7 @@ type TeamsAPI interface {
 	CreateGroupConversation(ctx context.Context, topic string, participantMRIs []string) (string, error)
 	AddMember(ctx context.Context, threadID string, memberMRI string) error
 	RemoveMember(ctx context.Context, threadID string, memberMRI string) error
+	GetThreadMembers(ctx context.Context, threadID string) ([]string, error)
 }
 
 // EventSink abstracts the bridge's remote event queue for testability.

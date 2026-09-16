@@ -77,6 +77,9 @@ type TeamsClient struct {
 	knownUsersMu sync.Mutex
 	knownUsers   map[string]struct{}
 
+	nameLookupMu   sync.Mutex
+	nameLookupMiss map[string]time.Time // userID -> when Graph last had no name for them
+
 	typingSeenMu sync.Mutex
 	typingSeen   map[string]time.Time // "threadID:senderID" -> last emitted
 }
@@ -256,6 +259,10 @@ func (c *TeamsClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) 
 			}
 		}
 	}
+	// Enterprise DMs come without member data; both members are in the ID.
+	if info.Members == nil && row.IsOneToOne {
+		info.Members = c.dmMemberListFromThreadID(threadID)
+	}
 	return info, nil
 }
 
@@ -263,13 +270,11 @@ func (c *TeamsClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*
 	if c == nil || c.Main == nil || c.Main.DB == nil || ghost == nil {
 		return nil, bridgev2.ErrNotLoggedIn
 	}
-	profile, err := c.Main.DB.Profile.GetByTeamsUserID(ctx, string(ghost.ID))
-	if err != nil {
-		return nil, err
-	}
 	info := &bridgev2.UserInfo{}
-	if profile != nil && strings.TrimSpace(profile.DisplayName) != "" {
-		info.Name = &profile.DisplayName
+	// Profile table first, then Graph; a ghost first seen through a reaction
+	// or a meeting has no message to learn its name from.
+	if name, _ := c.lookupUserDisplayName(ctx, string(ghost.ID)); name != "" {
+		info.Name = &name
 	} else {
 		info.Name = ptrString(string(ghost.ID))
 	}

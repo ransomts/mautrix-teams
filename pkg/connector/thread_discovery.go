@@ -52,17 +52,18 @@ func (c *TeamsClient) refreshThreads(ctx context.Context) error {
 			continue
 		}
 		// Enterprise conversations don't include member data; resolve DM
-		// names from the profile table using the thread ID.
+		// names from the profile table (or Graph) using the thread ID.
 		if thread.IsOneToOne && thread.RoomName == "" {
 			thread.RoomName = c.resolveDMNameFromThreadID(ctx, thread.ID)
 		}
-		// Preserve prefixed names from applyStructuredRoomNames — don't
-		// overwrite a "DM: ..." or "Group: ..." name with the raw name.
+		// The conversation list names channels and unnamed group chats
+		// "Chat"; the real names ("Team / Channel", "Group: A, B", "DM: X")
+		// are worked out afterwards and stored.  Never let the generic name
+		// from the API, or a stale placeholder, replace a stored real name:
+		// that made every restart rename each channel three times.
 		storedName := thread.RoomName
 		if existing, _ := c.Main.DB.ThreadState.Get(ctx, c.Login.ID, thread.ID); existing != nil {
-			if hasTypePrefix(existing.Name) {
-				storedName = existing.Name
-			}
+			storedName = chooseStoredName(thread.RoomName, existing.Name)
 		}
 		_ = c.Main.DB.ThreadState.Upsert(ctx, &teamsdb.ThreadState{
 			BridgeID:     c.Main.Bridge.ID,
@@ -75,15 +76,26 @@ func (c *TeamsClient) refreshThreads(ctx context.Context) error {
 
 		name := storedName
 		roomType := ptrRoomType(thread.IsOneToOne)
-		chatInfo := &bridgev2.ChatInfo{Name: &name, Type: roomType, CanBackfill: true}
+		chatInfo := &bridgev2.ChatInfo{Type: roomType, CanBackfill: true}
+		// A generic name is never announced: an existing portal keeps the
+		// name it has until the naming passes below find a real one, and a
+		// new portal is named from thread state when its room is created.
+		if !isGenericChatName(name) {
+			chatInfo.Name = &name
+		}
 
 		// Sync topic from conversation properties.
 		if topic := conv.ResolveTopic(); topic != "" {
 			chatInfo.Topic = &topic
 		}
 
-		// Sync member list from conversation data.
-		if members := c.buildChatMemberList(conv, thread.IsOneToOne); members != nil {
+		// Sync member list from conversation data; a DM without member data
+		// still has both members in its thread ID.
+		members := c.buildChatMemberList(conv, thread.IsOneToOne)
+		if members == nil && thread.IsOneToOne {
+			members = c.dmMemberListFromThreadID(thread.ID)
+		}
+		if members != nil {
 			chatInfo.Members = members
 		}
 
@@ -161,14 +173,13 @@ func (c *TeamsClient) chatInfoChangedWithPrev(threadID string, sig string) (stri
 	return prev, !known || prev != sig
 }
 
-// resolveDMNameFromThreadID extracts the other participant's display name
-// from an enterprise DM thread ID like "19:UUID1_UUID2@unq.gbl.spaces".
-func (c *TeamsClient) resolveDMNameFromThreadID(ctx context.Context, threadID string) string {
-	if c == nil || c.Meta == nil || c.Main == nil || c.Main.DB == nil {
+// dmCounterpartFromThreadID returns the Teams user ID of the other member
+// of an enterprise DM thread ("19:UUID1_UUID2@unq.gbl.spaces"), or "".
+func (c *TeamsClient) dmCounterpartFromThreadID(threadID string) string {
+	if c == nil || c.Meta == nil {
 		return ""
 	}
-	// Thread ID format: "19:UUID1_UUID2@unq.gbl.spaces"
-	id := strings.TrimPrefix(threadID, "19:")
+	id := strings.TrimPrefix(strings.TrimSpace(threadID), "19:")
 	if atIdx := strings.Index(id, "@"); atIdx > 0 {
 		id = id[:atIdx]
 	}
@@ -185,16 +196,135 @@ func (c *TeamsClient) resolveDMNameFromThreadID(ctx context.Context, threadID st
 	if strings.EqualFold(otherUUID, selfUUID) {
 		otherUUID = parts[1]
 	}
-	otherUserID := "8:orgid:" + otherUUID
-	profile, err := c.Main.DB.Profile.GetByTeamsUserID(ctx, otherUserID)
-	if err != nil || profile == nil || strings.TrimSpace(profile.DisplayName) == "" {
+	if otherUUID == "" {
 		return ""
 	}
-	return profile.DisplayName
+	return "8:orgid:" + otherUUID
+}
+
+// resolveDMNameFromThreadID returns the display name of the other member of
+// an enterprise DM thread: from the profile table, else from Graph (which
+// also fills the profile table and renames the ghost), else "".
+func (c *TeamsClient) resolveDMNameFromThreadID(ctx context.Context, threadID string) string {
+	if c == nil || c.Main == nil || c.Main.DB == nil {
+		return ""
+	}
+	otherUserID := c.dmCounterpartFromThreadID(threadID)
+	if otherUserID == "" {
+		return ""
+	}
+	return c.resolveUserDisplayName(ctx, otherUserID)
+}
+
+// resolveUserDisplayName returns teamsUserID's display name from the profile
+// table, falling back to a Graph directory lookup.  A name Graph returns is
+// stored and applied to the ghost.  Returns "" for a user Graph does not
+// know either (typically an account that has since been deleted).
+func (c *TeamsClient) resolveUserDisplayName(ctx context.Context, teamsUserID string) string {
+	name, fromGraph := c.lookupUserDisplayName(ctx, teamsUserID)
+	if fromGraph {
+		c.syncGhostName(ctx, teamsUserID, name)
+	}
+	return name
+}
+
+// lookupUserDisplayName is resolveUserDisplayName without the ghost update,
+// for use from inside GetUserInfo (which is itself the ghost update).  The
+// second result says whether the name came from Graph, and so is new.
+func (c *TeamsClient) lookupUserDisplayName(ctx context.Context, teamsUserID string) (string, bool) {
+	if c == nil || c.Main == nil || c.Main.DB == nil {
+		return "", false
+	}
+	teamsUserID = strings.TrimSpace(teamsUserID)
+	if teamsUserID == "" {
+		return "", false
+	}
+	if profile, err := c.Main.DB.Profile.GetByTeamsUserID(ctx, teamsUserID); err == nil && profile != nil {
+		if name := strings.TrimSpace(profile.DisplayName); name != "" && name != teamsUserID {
+			return name, false
+		}
+	}
+	// Only directory users ("8:orgid:UUID") can be looked up in Graph, and
+	// only when the Graph token is usable.
+	uuid, ok := strings.CutPrefix(teamsUserID, "8:orgid:")
+	if !ok || uuid == "" || c.recentNameLookupMiss(teamsUserID) {
+		return "", false
+	}
+	if err := c.ensureValidGraphToken(ctx); err != nil {
+		return "", false
+	}
+	gc, err := c.getGraphClient(ctx)
+	if err != nil {
+		return "", false
+	}
+	user, err := gc.GetUserByEmail(ctx, uuid) // accepts an object ID too
+	if err != nil {
+		log := c.log()
+		log.Debug().Err(err).Str("teams_user_id", teamsUserID).Msg("Graph user lookup failed")
+		return "", false
+	}
+	if user == nil || strings.TrimSpace(user.DisplayName) == "" {
+		// A deleted account: Graph will not know them next time either.
+		c.recordNameLookupMiss(teamsUserID)
+		return "", false
+	}
+	name := strings.TrimSpace(user.DisplayName)
+	_ = c.Main.DB.Profile.Upsert(ctx, teamsUserID, name, time.Now().UTC())
+	return name, true
+}
+
+// nameLookupMissTTL is how long a user Graph does not know is not asked
+// about again; discovery would otherwise ask every pass.
+const nameLookupMissTTL = 6 * time.Hour
+
+func (c *TeamsClient) recentNameLookupMiss(teamsUserID string) bool {
+	c.nameLookupMu.Lock()
+	defer c.nameLookupMu.Unlock()
+	at, ok := c.nameLookupMiss[teamsUserID]
+	return ok && time.Since(at) < nameLookupMissTTL
+}
+
+func (c *TeamsClient) recordNameLookupMiss(teamsUserID string) {
+	c.nameLookupMu.Lock()
+	defer c.nameLookupMu.Unlock()
+	if c.nameLookupMiss == nil {
+		c.nameLookupMiss = make(map[string]time.Time)
+	}
+	c.nameLookupMiss[teamsUserID] = time.Now()
+}
+
+// dmMemberListFromThreadID builds the member list of an enterprise DM from
+// its thread ID, for conversations the API returns without member data, so
+// the counterpart's ghost is in the room even before it has ever spoken.
+func (c *TeamsClient) dmMemberListFromThreadID(threadID string) *bridgev2.ChatMemberList {
+	other := c.dmCounterpartFromThreadID(threadID)
+	if other == "" || c.Meta == nil || c.Login == nil {
+		return nil
+	}
+	selfID := model.NormalizeTeamsUserID(c.Meta.TeamsUserID)
+	c.trackKnownUser(other)
+	memberMap := make(bridgev2.ChatMemberMap)
+	memberMap.Set(bridgev2.ChatMember{
+		EventSender: bridgev2.EventSender{IsFromMe: true, SenderLogin: c.Login.ID, Sender: teamsUserIDToNetworkUserID(selfID)},
+		Membership:  event.MembershipJoin,
+	})
+	memberMap.Set(bridgev2.ChatMember{
+		EventSender: bridgev2.EventSender{Sender: teamsUserIDToNetworkUserID(other)},
+		Membership:  event.MembershipJoin,
+	})
+	return &bridgev2.ChatMemberList{
+		IsFull:                     true,
+		CheckAllLogins:             true,
+		MemberMap:                  memberMap,
+		TotalMemberCount:           len(memberMap),
+		ExcludeChangesFromTimeline: true,
+	}
 }
 
 // resolveUnnamedGroupChats updates group chat threads named "Chat" by building
 // a participant-list name from the sender profiles of ingested messages.
+// Only real group chats: channels, meetings and system streams get their
+// names elsewhere and must not be given a member list as a name.
 func (c *TeamsClient) resolveUnnamedGroupChats(ctx context.Context) {
 	if c == nil || c.Main == nil || c.Main.DB == nil || c.Main.Bridge == nil || c.Login == nil {
 		return
@@ -208,16 +338,21 @@ func (c *TeamsClient) resolveUnnamedGroupChats(ctx context.Context) {
 		selfID = c.Meta.TeamsUserID
 	}
 	for _, th := range threads {
-		if th.IsOneToOne || (th.Name != "Chat" && th.Name != "") {
+		if th.IsOneToOne || !isGenericChatName(th.Name) || !isGroupChatThread(th.ThreadID) {
 			continue
 		}
 		name := c.buildGroupChatName(ctx, th.ThreadID, selfID)
+		var members *bridgev2.ChatMemberList
+		if name == "" {
+			// Nobody but us has spoken: ask the chat service who is in it.
+			name, members = c.groupChatNameAndMembers(ctx, th.ThreadID, selfID)
+		}
 		if name == "" || name == th.Name {
 			continue
 		}
 		th.Name = name
 		_ = c.Main.DB.ThreadState.Upsert(ctx, th)
-		chatInfo := &bridgev2.ChatInfo{Name: &name}
+		chatInfo := &bridgev2.ChatInfo{Name: &name, Members: members}
 		c.queueRemoteEvent(&simplevent.ChatResync{
 			EventMeta: simplevent.EventMeta{
 				Type:         bridgev2.RemoteEventChatResync,
@@ -258,14 +393,68 @@ func (c *TeamsClient) buildGroupChatName(ctx context.Context, threadID string, s
 		}
 		names = append(names, profile.DisplayName)
 	}
+	return joinGroupNames(names)
+}
+
+// joinGroupNames renders a group chat's participant names as its name:
+// sorted, comma-separated, at most three before "+N others".
+func joinGroupNames(names []string) string {
 	if len(names) == 0 {
 		return ""
 	}
+	names = append([]string(nil), names...)
 	sort.Strings(names)
 	if len(names) > 4 {
 		return strings.Join(names[:3], ", ") + fmt.Sprintf(" +%d others", len(names)-3)
 	}
 	return strings.Join(names, ", ")
+}
+
+// groupChatNameAndMembers names a group chat from the chat service's member
+// list and returns that list for the portal, for chats where nobody but the
+// user has sent a message (so message senders reveal nothing).  Members
+// whose name cannot be resolved still join, under their ID.
+func (c *TeamsClient) groupChatNameAndMembers(ctx context.Context, threadID string, selfUserID string) (string, *bridgev2.ChatMemberList) {
+	if c == nil || c.Login == nil {
+		return "", nil
+	}
+	ids, err := c.getAPI().GetThreadMembers(ctx, threadID)
+	if err != nil {
+		log := c.log()
+		log.Debug().Err(err).Str("thread_id", threadID).Msg("Failed to fetch thread members")
+		return "", nil
+	}
+	selfNorm := model.NormalizeTeamsUserID(selfUserID)
+	memberMap := make(bridgev2.ChatMemberMap)
+	var names []string
+	for _, id := range ids {
+		id = model.NormalizeTeamsUserID(id)
+		if id == "" || strings.HasPrefix(strings.ToLower(id), "28:") {
+			continue // bots
+		}
+		es := bridgev2.EventSender{Sender: teamsUserIDToNetworkUserID(id)}
+		if id == selfNorm {
+			es.IsFromMe = true
+			es.SenderLogin = c.Login.ID
+		} else {
+			c.trackKnownUser(id)
+			if name := c.resolveUserDisplayName(ctx, id); name != "" {
+				names = append(names, name)
+			}
+		}
+		memberMap.Set(bridgev2.ChatMember{EventSender: es, Membership: event.MembershipJoin})
+	}
+	var members *bridgev2.ChatMemberList
+	if len(memberMap) > 0 {
+		members = &bridgev2.ChatMemberList{
+			IsFull:                     true,
+			CheckAllLogins:             true,
+			MemberMap:                  memberMap,
+			TotalMemberCount:           len(memberMap),
+			ExcludeChangesFromTimeline: true,
+		}
+	}
+	return joinGroupNames(names), members
 }
 
 // applyStructuredRoomNames adds type prefixes (DM:, Group:, Meeting:) to room
@@ -320,7 +509,18 @@ func (c *TeamsClient) applyStructuredRoomNames(ctx context.Context, channelMap m
 		switch {
 		case th.IsOneToOne:
 			if baseName == "" {
-				continue
+				// Nobody (profile table, Graph) knows the counterpart, which
+				// happens for accounts that have since been deleted.  Name
+				// the room after the ID rather than leaving it nameless,
+				// which showed it as "bridge bot, <me>".
+				baseName = c.resolveDMNameFromThreadID(ctx, threadID)
+				if baseName == "" {
+					newName = placeholderDMName(c.dmCounterpartFromThreadID(threadID))
+					if newName == "" {
+						continue
+					}
+					break
+				}
 			}
 			newName = "DM: " + baseName
 		case strings.Contains(threadID, "meeting_"):
@@ -464,12 +664,88 @@ func (c *TeamsClient) buildChatMemberList(conv model.RemoteConversation, isOneTo
 	}
 }
 
+var typePrefixes = []string{
+	"DM: ", "Group: ", "Meeting: ",
+	// Legacy bracket prefixes from previous versions.
+	"[DM] ", "[Channel] ", "[Group] ", "[Meeting] ",
+}
+
 func hasTypePrefix(name string) bool {
-	return strings.HasPrefix(name, "DM: ") || strings.HasPrefix(name, "Group: ") ||
-		strings.HasPrefix(name, "Meeting: ") ||
-		// Legacy bracket prefixes from previous versions.
-		strings.HasPrefix(name, "[DM] ") || strings.HasPrefix(name, "[Channel] ") ||
-		strings.HasPrefix(name, "[Group] ") || strings.HasPrefix(name, "[Meeting] ")
+	for _, prefix := range typePrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// stripTypePrefix returns name without its "DM: "/"Group: "/… prefix.
+func stripTypePrefix(name string) string {
+	for _, prefix := range typePrefixes {
+		if rest, ok := strings.CutPrefix(name, prefix); ok {
+			return rest
+		}
+	}
+	return name
+}
+
+// chooseStoredName decides the name to store for a thread from the name the
+// conversation list reports (apiName) and the one stored last time.
+func chooseStoredName(apiName, existingName string) string {
+	switch {
+	case existingName == "":
+		return apiName
+	case isGenericChatName(apiName) && !isGenericChatName(existingName):
+		// The API has nothing better than "Chat": keep what was worked
+		// out (a structured, prefixed or placeholder name).
+		return existingName
+	case hasTypePrefix(existingName) && !isPlaceholderDMName(existingName) &&
+		apiName == stripTypePrefix(existingName):
+		// Same underlying name as before: keep the prefixed form.  A
+		// different one (a renamed chat, a person's new display name)
+		// goes through and is prefixed again.
+		return existingName
+	case strings.HasSuffix(existingName, " / "+apiName):
+		// A channel: the API gives the bare channel name, the stored one
+		// is "Team / Channel".
+		return existingName
+	}
+	return apiName
+}
+
+// isGenericChatName reports whether name is the API's stand-in for "no
+// name" rather than something a person chose.
+func isGenericChatName(name string) bool {
+	name = strings.TrimSpace(name)
+	return name == "" || name == "Chat"
+}
+
+const placeholderDMPrefix = "DM: unknown user "
+
+// placeholderDMName names a DM whose counterpart cannot be resolved, after
+// the first block of their ID; "" when there is no ID either.
+func placeholderDMName(teamsUserID string) string {
+	id := strings.TrimPrefix(strings.TrimSpace(teamsUserID), "8:orgid:")
+	if id == "" {
+		return ""
+	}
+	if idx := strings.Index(id, "-"); idx > 0 {
+		id = id[:idx]
+	}
+	return placeholderDMPrefix + id
+}
+
+func isPlaceholderDMName(name string) bool {
+	return strings.HasPrefix(name, placeholderDMPrefix)
+}
+
+// isGroupChatThread reports whether threadID is a plain group chat: not a
+// DM, channel, meeting or system stream.
+func isGroupChatThread(threadID string) bool {
+	threadID = strings.ToLower(strings.TrimSpace(threadID))
+	return strings.HasSuffix(threadID, "@thread.v2") &&
+		!strings.Contains(threadID, "meeting_") &&
+		!strings.Contains(threadID, "teamsstream_")
 }
 
 // systemStreamName maps a teamsstream_ thread ID to a clean display name.

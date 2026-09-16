@@ -105,6 +105,43 @@ func (c *Client) ListConversations(ctx context.Context, token string) ([]model.R
 	return payload.Conversations, nil
 }
 
+// GetThreadMembers returns the user IDs ("8:orgid:…") of a thread's members
+// from the chat service's thread endpoint.  The conversation list does not
+// carry member data for enterprise chats, so this is how a group chat's
+// members are known before they have spoken.
+func (c *Client) GetThreadMembers(ctx context.Context, threadID string) ([]string, error) {
+	if c == nil || c.HTTP == nil {
+		return nil, ErrMissingHTTPClient
+	}
+	if c.Token == "" {
+		return nil, ErrMissingToken
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil, errors.New("missing thread id")
+	}
+	baseURL := c.MessagesURL
+	if baseURL == "" {
+		baseURL = defaultMessagesURL
+	}
+	endpoint := fmt.Sprintf("%s/v1/threads/%s?view=msnp24Equivalent", deriveBaseURL(baseURL), url.PathEscape(threadID))
+	var payload struct {
+		Members []struct {
+			ID string `json:"id"`
+		} `json:"members"`
+	}
+	if err := c.fetchJSON(ctx, endpoint, &payload); err != nil {
+		return nil, err
+	}
+	members := make([]string, 0, len(payload.Members))
+	for _, m := range payload.Members {
+		if id := strings.TrimSpace(m.ID); id != "" {
+			members = append(members, id)
+		}
+	}
+	return members, nil
+}
+
 // UpdateConversationTopic sets the topic (display name) for a group chat thread.
 func (c *Client) UpdateConversationTopic(ctx context.Context, threadID string, topic string) error {
 	if c == nil || c.HTTP == nil {

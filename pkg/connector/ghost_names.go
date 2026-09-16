@@ -42,8 +42,10 @@ func (c *TeamsClient) syncGhostName(ctx context.Context, teamsUserID, displayNam
 }
 
 // syncGhostNamesFromProfiles renames every ghost whose name lags the profile
-// table.  Run after connecting, it repairs ghosts that were named before
-// their profile was known.
+// table, then asks the Graph directory about ghosts still named after
+// their ID (seen only through a reaction, a receipt or a meeting, so no
+// message ever carried their name).  Run after connecting, it repairs
+// ghosts that were named before their profile was known.
 func (c *TeamsClient) syncGhostNamesFromProfiles(ctx context.Context) {
 	if c == nil || c.Main == nil || c.Main.DB == nil {
 		return
@@ -59,4 +61,36 @@ func (c *TeamsClient) syncGhostNamesFromProfiles(ctx context.Context) {
 		}
 		c.syncGhostName(ctx, p.TeamsUserID, p.DisplayName)
 	}
+	for _, id := range c.idNamedGhosts(ctx) {
+		if ctx.Err() != nil {
+			return
+		}
+		// resolveUserDisplayName renames the ghost when Graph knows them.
+		c.resolveUserDisplayName(ctx, id)
+	}
+}
+
+// idNamedGhosts lists the directory users whose ghost is still named after
+// its Teams ID.
+func (c *TeamsClient) idNamedGhosts(ctx context.Context) []string {
+	if c == nil || c.Main == nil || c.Main.Bridge == nil || c.Main.Bridge.DB == nil {
+		return nil
+	}
+	rows, err := c.Main.Bridge.DB.Query(ctx, `
+		SELECT id FROM ghost
+		WHERE bridge_id=$1 AND name=id AND id LIKE '8:orgid:%'
+	`, c.Main.Bridge.DB.BridgeID)
+	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to list ID-named ghosts")
+		return nil
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil && strings.TrimSpace(id) != "" {
+			ids = append(ids, strings.TrimSpace(id))
+		}
+	}
+	return ids
 }

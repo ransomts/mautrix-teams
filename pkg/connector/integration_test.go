@@ -35,6 +35,7 @@ type mockTeamsAPI struct {
 	listMessagesErr     error
 	consumptionHorizons *model.ConsumptionHorizonsResponse
 	conversations       []model.RemoteConversation
+	threadMembers       map[string][]string
 
 	// Call tracking
 	sentMessages         []sentMessage
@@ -266,6 +267,12 @@ func (m *mockTeamsAPI) RemoveMember(_ context.Context, threadID, memberMRI strin
 	defer m.mu.Unlock()
 	m.removedMembers = append(m.removedMembers, removedMember{ThreadID: threadID, MemberMRI: memberMRI})
 	return nil
+}
+
+func (m *mockTeamsAPI) GetThreadMembers(_ context.Context, threadID string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.threadMembers[threadID]...), nil
 }
 
 // ---------------------------------------------------------------------------
