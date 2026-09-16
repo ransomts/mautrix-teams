@@ -497,10 +497,16 @@ func (c *TeamsClient) HandleMatrixMembership(ctx context.Context, msg *bridgev2.
 		return nil, errors.New("missing thread id")
 	}
 
-	// Extract the target ghost's network user ID.
+	// Only inviting or kicking a ghost means anything on the Teams side.
+	// Everything else bridgev2 reports here (the user's own joins and
+	// profile changes, invites to non-ghosts) is nothing to relay, not an
+	// error.
+	if msg.Type != bridgev2.Invite && msg.Type != bridgev2.Kick {
+		return nil, nil
+	}
 	ghost, ok := msg.Target.(*bridgev2.Ghost)
 	if !ok || ghost == nil {
-		return nil, errors.New("membership change target is not a ghost")
+		return nil, nil
 	}
 	memberMRI := string(ghost.ID)
 	if memberMRI == "" {
@@ -516,8 +522,6 @@ func (c *TeamsClient) HandleMatrixMembership(ctx context.Context, msg *bridgev2.
 		if err := c.getAPI().RemoveMember(ctx, threadID, memberMRI); err != nil {
 			return nil, err
 		}
-	default:
-		return nil, fmt.Errorf("unsupported membership change type: %v", msg.Type)
 	}
 	return nil, nil
 }

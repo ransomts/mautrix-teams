@@ -401,7 +401,7 @@ func (c *TeamsClient) FetchMessages(ctx context.Context, params bridgev2.FetchMe
 			continue
 		}
 		senderID := model.NormalizeTeamsUserID(msg.SenderID)
-		if senderID == "" || isLikelyThreadID(senderID) {
+		if senderID == "" || isLikelyThreadID(senderID) || isSystemMessageType(msg.MessageType) {
 			continue
 		}
 		if strings.Contains(msg.MessageType, "MessageDelete") {

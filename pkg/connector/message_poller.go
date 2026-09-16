@@ -211,12 +211,14 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 		}
 
 		senderID := model.NormalizeTeamsUserID(msg.SenderID)
-		if senderID == "" || strings.EqualFold(senderID, strings.TrimSpace(th.ThreadID)) || isLikelyThreadID(senderID) {
+		if senderID == "" || strings.EqualFold(senderID, strings.TrimSpace(th.ThreadID)) || isLikelyThreadID(senderID) ||
+			isSystemMessageType(msg.MessageType) {
 			zerolog.Ctx(ctx).Debug().
 				Str("thread_id", th.ThreadID).
 				Str("message_id", msg.MessageID).
 				Str("sender_id", senderID).
-				Msg("Skipping Teams message with non-user sender ID")
+				Str("message_type", msg.MessageType).
+				Msg("Skipping Teams system message or non-user sender")
 			continue
 		}
 
