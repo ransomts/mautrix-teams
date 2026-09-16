@@ -4,6 +4,8 @@ package connector
 
 import (
 	"context"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +29,12 @@ func (c *TeamsClient) queueReactionSyncForMessage(ctx context.Context, th *teams
 		return
 	}
 	messageID = c.resolveReactionSyncTargetMessageID(ctx, th.ThreadID, messageID, msg)
+
+	// Every poll page carries the same old messages again; only re-announce
+	// a message's reactions when the set actually changed since we last saw it.
+	if !c.reactionStateChanged(messageID, reactionSignature(msg.Reactions)) {
+		return
+	}
 
 	data, hasReactions := c.buildReactionSyncData(msg.Reactions)
 	if !hasReactions && !c.shouldSendEmptyReactionSync(ctx, th.ThreadID, messageID) {
@@ -120,6 +128,37 @@ func (c *TeamsClient) shouldSendEmptyReactionSync(ctx context.Context, threadID 
 		return false
 	}
 	return len(existing) > 0
+}
+
+// reactionSignature is a canonical, order-independent rendering of a
+// message's reaction set.
+func reactionSignature(reactions []model.MessageReaction) string {
+	if len(reactions) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(reactions))
+	for _, reaction := range reactions {
+		key := strings.TrimSpace(reaction.EmotionKey)
+		for _, user := range reaction.Users {
+			parts = append(parts, key+"|"+model.NormalizeTeamsUserID(user.MRI)+"|"+strconv.FormatInt(user.TimeMS, 10))
+		}
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ";")
+}
+
+// reactionStateChanged records sig for messageID and reports whether it
+// differs from the previously recorded one. The first sighting counts as a
+// change so state is announced once after startup.
+func (c *TeamsClient) reactionStateChanged(messageID string, sig string) bool {
+	c.reactionSeenMu.Lock()
+	defer c.reactionSeenMu.Unlock()
+	if c.reactionSigs == nil {
+		c.reactionSigs = make(map[string]string)
+	}
+	prev, known := c.reactionSigs[messageID]
+	c.reactionSigs[messageID] = sig
+	return !known || prev != sig
 }
 
 func (c *TeamsClient) markReactionSeen(messageID string, seen bool) bool {

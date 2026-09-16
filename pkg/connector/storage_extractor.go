@@ -42,6 +42,11 @@ const graphFilesReadWriteScope = "https://graph.microsoft.com/Files.ReadWrite"
 const graphTeamReadScope = "https://graph.microsoft.com/Team.ReadBasic.All"
 const graphChannelReadScope = "https://graph.microsoft.com/Channel.ReadBasic.All"
 
+// graphDefaultScope asks for whatever Graph permissions are preauthorized for
+// the client. First-party clients such as the Teams web app reject requests
+// for specific Graph scopes with AADSTS65002 but accept .default.
+const graphDefaultScope = "https://graph.microsoft.com/.default"
+
 var newAuthClient = auth.NewClient
 
 // ExtractTeamsLoginMetadataFromLocalStorage parses the MSAL localStorage payload
@@ -166,7 +171,14 @@ func refreshAccessTokenForGraphScope(ctx context.Context, client *auth.Client, r
 		return refreshed, nil
 	}
 
-	return nil, fmt.Errorf("graph scope refresh failed (%v); fallback scopes failed (%v)", err, fallbackErr)
+	defaultClient := *client
+	defaultClient.Scopes = []string{graphDefaultScope}
+	refreshed, defaultErr := defaultClient.RefreshAccessToken(ctx, refreshToken)
+	if defaultErr == nil {
+		return refreshed, nil
+	}
+
+	return nil, fmt.Errorf("graph scope refresh failed (%v); fallback scopes failed (%v); .default failed (%v)", err, fallbackErr, defaultErr)
 }
 
 func resolveClientID(main *TeamsConnector) string {

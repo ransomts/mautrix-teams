@@ -54,6 +54,10 @@ type TeamsClient struct {
 
 	reactionSeenMu sync.Mutex
 	reactionSeen   map[string]struct{}
+	reactionSigs   map[string]string // messageID -> last announced reaction signature
+
+	chatInfoMu   sync.Mutex
+	chatInfoSigs map[string]string // threadID -> last announced chat info signature
 
 	receiptPollMu sync.Mutex
 	receiptPoll   map[string]time.Time

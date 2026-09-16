@@ -81,6 +81,12 @@ func (c *TeamsClient) refreshThreads(ctx context.Context) error {
 			chatInfo.Members = members
 		}
 
+		// Discovery runs every 30s; only re-announce a chat whose name, topic
+		// or membership changed (or that we have not announced since startup),
+		// otherwise every pass floods each portal's event queue.
+		if !c.chatInfoChanged(thread.ID, chatInfoSignature(chatInfo)) {
+			continue
+		}
 		c.queueRemoteEvent(&simplevent.ChatResync{
 			EventMeta: simplevent.EventMeta{
 				Type:         bridgev2.RemoteEventChatResync,
@@ -92,6 +98,49 @@ func (c *TeamsClient) refreshThreads(ctx context.Context) error {
 		})
 	}
 	return nil
+}
+
+// chatInfoSignature is a canonical rendering of the parts of a ChatInfo that
+// discovery can change: name, topic, room type and member IDs.
+func chatInfoSignature(info *bridgev2.ChatInfo) string {
+	if info == nil {
+		return ""
+	}
+	var b strings.Builder
+	if info.Name != nil {
+		b.WriteString(*info.Name)
+	}
+	b.WriteString("\x00")
+	if info.Topic != nil {
+		b.WriteString(*info.Topic)
+	}
+	b.WriteString("\x00")
+	if info.Type != nil {
+		b.WriteString(string(*info.Type))
+	}
+	b.WriteString("\x00")
+	if info.Members != nil {
+		ids := make([]string, 0, len(info.Members.MemberMap))
+		for id := range info.Members.MemberMap {
+			ids = append(ids, string(id))
+		}
+		sort.Strings(ids)
+		b.WriteString(strings.Join(ids, ","))
+	}
+	return b.String()
+}
+
+// chatInfoChanged records sig for threadID and reports whether it differs
+// from the last recorded one; the first sighting counts as a change.
+func (c *TeamsClient) chatInfoChanged(threadID string, sig string) bool {
+	c.chatInfoMu.Lock()
+	defer c.chatInfoMu.Unlock()
+	if c.chatInfoSigs == nil {
+		c.chatInfoSigs = make(map[string]string)
+	}
+	prev, known := c.chatInfoSigs[threadID]
+	c.chatInfoSigs[threadID] = sig
+	return !known || prev != sig
 }
 
 // resolveDMNameFromThreadID extracts the other participant's display name
