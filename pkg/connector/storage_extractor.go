@@ -13,7 +13,10 @@ import (
 	"maunium.net/go/mautrix/bridgev2"
 )
 
-const mbiRefreshScope = "service::api.fl.spaces.skype.com::MBI_SSL offline_access"
+// mbiRefreshScope must be sent alone: the identity provider rejects it when
+// combined with offline_access ("offline_access scope request must include
+// either openid scope or a resource scope", AADSTS70011).
+const mbiRefreshScope = "service::api.fl.spaces.skype.com::MBI_SSL"
 const mbiTokenEndpoint = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
 
 // mbiTokenEndpointFor returns the endpoint to use for MBI-scope refreshes.

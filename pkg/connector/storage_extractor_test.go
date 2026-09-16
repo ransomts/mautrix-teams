@@ -109,7 +109,7 @@ func TestExtractTeamsLoginMetadataFromLocalStorage_RefreshesGraphWhenMissingInSt
 		}
 		scope := r.Form.Get("scope")
 		switch {
-		case scope == "service::api.fl.spaces.skype.com::MBI_SSL offline_access":
+		case scope == "service::api.fl.spaces.skype.com::MBI_SSL":
 			_, _ = w.Write([]byte(`{"access_token":"mbi-from-refresh","refresh_token":"refresh-updated","expires_in":3600}`))
 		case strings.Contains(scope, "https://graph.microsoft.com/Files.ReadWrite"):
 			_, _ = w.Write([]byte(`{"access_token":"graph-from-refresh","refresh_token":"refresh-updated-2","expires_in":7200}`))

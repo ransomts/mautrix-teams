@@ -18,6 +18,6 @@ Entries below cover changes made in this fork only.
 * Stale typing control messages (at or below the cursor, or older than 15s) are ignored instead of being re-emitted on every poll.
 * Long-poll requests are bounded by context rather than the client's global timeout, which was shorter than the server hold and killed every idle poll; retry sleeps honour context cancellation.
 * Raised the general HTTP timeout to 60s for uploads/downloads and stopped logging the PKCE `code_verifier`.
-* MBI token refresh derives the `/common` endpoint only for real Microsoft hosts and requests `offline_access` alongside `MBI_SSL`.
+* MBI token refresh derives the `/common` endpoint only for real Microsoft hosts (test servers are left alone).
 * Removed unused helpers (`wrapTeamsReplyHTML`, `DownloadMatrixMedia`, `SendMessage`, `SendGIF`); replaced the upstream mautrix-discord changelog with this file.
 * Fixed a `go vet` failure in `presenceLoop` and gofmt'd the tree.
