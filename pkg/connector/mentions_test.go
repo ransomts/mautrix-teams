@@ -286,16 +286,3 @@ func TestConvertMatrixMentionsToTeamsNilResolver(t *testing.T) {
 		t.Fatalf("expected nil, got %#v", mentions)
 	}
 }
-
-func TestWrapTeamsReplyHTML(t *testing.T) {
-	got := wrapTeamsReplyHTML("1234567890", "Hello world")
-	if !strings.Contains(got, `itemtype="http://schema.skype.com/Reply"`) {
-		t.Fatalf("expected reply itemtype, got %q", got)
-	}
-	if !strings.Contains(got, `itemid="1234567890"`) {
-		t.Fatalf("expected reply itemid, got %q", got)
-	}
-	if !strings.HasSuffix(got, "Hello world") {
-		t.Fatalf("expected body after blockquote, got %q", got)
-	}
-}

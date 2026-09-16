@@ -377,15 +377,6 @@ func (c *TeamsClient) buildTeamsReplyHTML(ctx context.Context, threadID, replyTo
 	)
 }
 
-// wrapTeamsReplyHTML wraps body with a reply blockquote (no quoted content).
-// Kept for backward compatibility; prefer buildTeamsReplyHTML.
-func wrapTeamsReplyHTML(replyToMessageID string, body string) string {
-	return fmt.Sprintf(
-		`<blockquote itemtype="http://schema.skype.com/Reply" itemid="%s"></blockquote>%s`,
-		html.EscapeString(replyToMessageID), body,
-	)
-}
-
 func (c *TeamsClient) sendOutboundAttachment(ctx context.Context, roomMXID id.RoomID, threadID string, content *event.MessageEventContent, clientMessageID string) error {
 	send := func(ctx context.Context, threadID, filename string, data []byte, caption string) error {
 		_, err := c.sendAttachmentMessageWithClientMessageID(ctx, threadID, filename, data, caption, clientMessageID)

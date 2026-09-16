@@ -27,7 +27,7 @@ A Matrix-Microsoft Teams puppeting bridge built on the [mautrix bridgev2](https:
 ### Docker Compose (recommended)
 
 1. Clone the repository
-2. Copy `pkg/connector/example-config.yaml` and configure your bridge settings in `config.yaml`
+2. Generate `config.yaml` with `mautrix-teams -e -c config.yaml` (the Docker image does this on first start) and fill in your homeserver and bridge settings; the bridge-specific `network:` section is documented in `pkg/connector/example-config.yaml`
 3. Set up your `docker-compose.yml` with the bridge service alongside your homeserver
 4. Build and start:
 
@@ -40,17 +40,19 @@ docker compose up -d
 
 ```bash
 ./build.sh
-./mautrix-teams
+./mautrix-teams -e -c config.yaml           # write the example config, then edit it
+./mautrix-teams -g -c config.yaml -r registration.yaml   # generate the appservice registration
+./mautrix-teams -c config.yaml
 ```
 
 ## Login
 
-The bridge extracts MSAL tokens from the Teams web client's localStorage. There are two login flows:
+The bridge extracts MSAL tokens from the Teams web client's localStorage. Two login flows are offered:
 
-1. **Manual**: Open Teams Web, extract localStorage JSON, and pass it to the bridge
-2. **Webview**: Automated browser-based extraction (if supported by your setup)
+1. **teams.microsoft.com (manual paste)** (`manual_localstorage`): open Teams Web, copy the localStorage JSON from browser DevTools, and paste it into the login prompt
+2. **teams.microsoft.com (in-app browser)** (`webview_localstorage`): automatic extraction through an embedded browser, for clients that support it
 
-A helper script `teams-login.py` is provided in the repo root for the manual flow. Run `python3 teams-login.py --help` for usage.
+Both flows are started from any Matrix client by sending `!msteams login` to the bridge bot. The manual flow needs no tooling beyond the browser; a deployment repository may provide a helper script that gathers the localStorage JSON for you.
 
 ## Configuration
 
@@ -62,6 +64,7 @@ Key config options in `example-config.yaml`:
 | `authorize_endpoint` | OAuth authorize URL (set for enterprise/tenant accounts) |
 | `token_endpoint` | OAuth token URL (set for enterprise/tenant accounts) |
 | `skype_token_endpoint` | Skype token URL (set for enterprise accounts) |
+| `redirect_uri` | OAuth redirect URI (may need `https://teams.microsoft.com/go` for enterprise accounts) |
 | `sync_mode` | `"poll"` (default) or `"longpoll"` for lower latency |
 | `log_level` | `"trace"`, `"debug"`, `"info"` (default), `"warn"`, or `"error"` |
 

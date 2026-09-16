@@ -14,10 +14,6 @@ import (
 	"maunium.net/go/mautrix/id"
 )
 
-func (c *TeamsClient) DownloadMatrixMedia(ctx context.Context, mxcURL string) ([]byte, error) {
-	return c.downloadMatrixMedia(ctx, mxcURL, nil)
-}
-
 func (c *TeamsClient) downloadMatrixMedia(ctx context.Context, mxcURL string, file *event.EncryptedFileInfo) ([]byte, error) {
 	mxcURL = strings.TrimSpace(mxcURL)
 	if mxcURL == "" {

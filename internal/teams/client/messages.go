@@ -339,18 +339,6 @@ func (c *Client) GetMessage(ctx context.Context, conversationID string, messageI
 	return nil, fmt.Errorf("message %s not found in conversation", messageID)
 }
 
-func (c *Client) SendMessage(ctx context.Context, threadID string, text string, fromUserID string) (string, error) {
-	clientMessageID := GenerateClientMessageID()
-	_, err := c.SendMessageWithID(ctx, threadID, text, fromUserID, clientMessageID)
-	return clientMessageID, err
-}
-
-func (c *Client) SendGIF(ctx context.Context, threadID string, gifURL string, title string, fromUserID string) (string, error) {
-	clientMessageID := GenerateClientMessageID()
-	_, err := c.SendGIFWithID(ctx, threadID, gifURL, title, fromUserID, clientMessageID)
-	return clientMessageID, err
-}
-
 func (c *Client) SendMessageWithID(ctx context.Context, threadID string, text string, fromUserID string, clientMessageID string) (int, error) {
 	return c.sendHTMLMessageWithID(ctx, threadID, formatHTMLContent(text), fromUserID, clientMessageID)
 }

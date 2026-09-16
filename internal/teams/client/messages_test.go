@@ -434,7 +434,8 @@ func TestSendMessageSuccess(t *testing.T) {
 	client.Token = "token123"
 
 	threadID := "@19:abc@thread.v2"
-	clientMessageID, err := client.SendMessage(context.Background(), threadID, "Hello <world>\nLine", "8:live:me")
+	clientMessageID := GenerateClientMessageID()
+	_, err := client.SendMessageWithID(context.Background(), threadID, "Hello <world>\nLine", "8:live:me", clientMessageID)
 	if err != nil {
 		t.Fatalf("SendMessage failed: %v", err)
 	}
@@ -526,7 +527,7 @@ func TestSendMessageNon2xx(t *testing.T) {
 	client.SendMessagesURL = server.URL + "/conversations"
 	client.Token = "token123"
 
-	_, err := client.SendMessage(context.Background(), "@19:abc@thread.v2", "hello", "8:live:me")
+	_, err := client.SendMessageWithID(context.Background(), "@19:abc@thread.v2", "hello", "8:live:me", GenerateClientMessageID())
 	if err == nil {
 		t.Fatalf("expected error for non-2xx")
 	}
