@@ -183,10 +183,13 @@ func refreshAccessTokenForSkypeScope(ctx context.Context, client *auth.Client, r
 // code logins use the configured Graph scope against the tenant endpoint;
 // localStorage logins keep the legacy scope fallbacks.
 func refreshAccessTokenForGraphScopeWithMeta(ctx context.Context, client *auth.Client, refreshToken string, main *TeamsConnector, meta *teamsid.UserLoginMetadata) (*auth.AuthState, error) {
-	if meta != nil && strings.TrimSpace(meta.RefreshScope) != "" {
+	if (meta != nil && strings.TrimSpace(meta.RefreshScope) != "") || tenantTokenEndpoint(main) != "" {
 		graphClient := *client
 		graphClient.Scopes = strings.Fields(main.deviceCodeGraphScope())
-		return graphClient.RefreshAccessToken(ctx, refreshToken)
+		if refreshed, err := graphClient.RefreshAccessToken(ctx, refreshToken); err == nil {
+			return refreshed, nil
+		}
+		// Fall through to the scope fallbacks (including .default) on failure.
 	}
 	return refreshAccessTokenForGraphScope(ctx, client, refreshToken)
 }
