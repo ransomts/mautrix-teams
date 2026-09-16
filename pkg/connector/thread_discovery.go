@@ -557,8 +557,11 @@ func (c *TeamsClient) syncTeamSpaces(ctx context.Context, channelMap map[string]
 		chatInfo := &bridgev2.ChatInfo{Name: &name, Type: &spaceType}
 		c.queueRemoteEvent(&simplevent.ChatResync{
 			EventMeta: simplevent.EventMeta{
-				Type:         bridgev2.RemoteEventChatResync,
-				PortalKey:    networkid.PortalKey{ID: teamPortalID(teamID), Receiver: c.Login.ID},
+				Type: bridgev2.RemoteEventChatResync,
+				// Unscoped receiver: channels reference their parent space with
+				// an empty receiver, so the space portal must be unscoped too,
+				// otherwise a second (orphan, login-scoped) space is created.
+				PortalKey:    networkid.PortalKey{ID: teamPortalID(teamID)},
 				CreatePortal: true,
 				Timestamp:    time.Now().UTC(),
 			},
