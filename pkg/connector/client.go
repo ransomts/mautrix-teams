@@ -59,6 +59,9 @@ type TeamsClient struct {
 	chatInfoMu   sync.Mutex
 	chatInfoSigs map[string]string // threadID -> last announced chat info signature
 
+	teamNamesMu sync.Mutex
+	teamNames   map[string]string // teamID -> display name (from Graph teams/channels)
+
 	receiptPollMu sync.Mutex
 	receiptPoll   map[string]time.Time
 	unreadMu      sync.Mutex
@@ -583,11 +586,17 @@ func (c *TeamsClient) log() zerolog.Logger {
 // name from Graph, else the name the portal already has, else "Team".
 func (c *TeamsClient) teamSpaceChatInfo(ctx context.Context, teamID string, portal *bridgev2.Portal) *bridgev2.ChatInfo {
 	spaceType := database.RoomTypeSpace
-	name := "Team"
-	if portal != nil && strings.TrimSpace(portal.Name) != "" {
-		name = portal.Name
+	// A stored "Chat" is the generic fallback, not a real team name; ignore it.
+	name := ""
+	if portal != nil {
+		if pn := strings.TrimSpace(portal.Name); pn != "" && pn != "Chat" {
+			name = pn
+		}
 	}
-	if gc, err := c.getGraphClient(ctx); err == nil {
+	// Prefer a name resolved during discovery (covers teams me/joinedTeams omits).
+	if cached := c.cachedTeamName(teamID); cached != "" {
+		name = cached
+	} else if gc, err := c.getGraphClient(ctx); err == nil {
 		if teams, err := gc.ListJoinedTeams(ctx); err == nil {
 			for _, team := range teams {
 				if strings.TrimSpace(team.ID) == teamID && strings.TrimSpace(team.DisplayName) != "" {
@@ -596,6 +605,9 @@ func (c *TeamsClient) teamSpaceChatInfo(ctx context.Context, teamID string, port
 				}
 			}
 		}
+	}
+	if name == "" {
+		name = "Team"
 	}
 	return &bridgev2.ChatInfo{Name: &name, Type: &spaceType}
 }

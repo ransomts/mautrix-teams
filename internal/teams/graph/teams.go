@@ -16,6 +16,7 @@ type Team struct {
 type Channel struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"displayName"`
+	Description string `json:"description"`
 }
 
 // ChannelInfo pairs a channel with its parent team.
@@ -23,6 +24,7 @@ type ChannelInfo struct {
 	ChannelName string
 	TeamName    string
 	TeamID      string
+	Description string
 }
 
 // ListJoinedTeamsAndChannels fetches all teams the user belongs to and their
@@ -56,6 +58,7 @@ func (c *GraphClient) ListJoinedTeamsAndChannels(ctx context.Context) (map[strin
 				ChannelName: strings.TrimSpace(ch.DisplayName),
 				TeamName:    strings.TrimSpace(team.DisplayName),
 				TeamID:      team.ID,
+				Description: strings.TrimSpace(ch.Description),
 			}
 		}
 	}
@@ -96,7 +99,7 @@ func (c *GraphClient) ListJoinedTeams(ctx context.Context) ([]Team, error) {
 }
 
 func (c *GraphClient) listTeamChannels(ctx context.Context, teamID string) ([]Channel, error) {
-	endpoint := "https://graph.microsoft.com/v1.0/teams/" + teamID + "/channels?$select=id,displayName"
+	endpoint := "https://graph.microsoft.com/v1.0/teams/" + teamID + "/channels?$select=id,displayName,description"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err

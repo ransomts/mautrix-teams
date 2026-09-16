@@ -223,10 +223,14 @@ func (c *TeamsClient) syncOnce(ctx context.Context) error {
 	}
 	log.Debug().Msg("Resolving unnamed group chats")
 	c.resolveUnnamedGroupChats(ctx)
+	// Fetch the team/channel map once and reuse it for both space naming and
+	// structured room names, so team spaces can be named even when
+	// me/joinedTeams is inconsistent with the channels the user actually sees.
+	channelMap := c.fetchTeamChannelMap(ctx)
 	log.Debug().Msg("Syncing team spaces")
-	c.syncTeamSpaces(ctx)
+	c.syncTeamSpaces(ctx, channelMap)
 	log.Debug().Msg("Applying structured room names")
-	c.applyStructuredRoomNames(ctx)
+	c.applyStructuredRoomNames(ctx, channelMap)
 	log.Info().Msg("Full sync cycle complete")
 	return nil
 }

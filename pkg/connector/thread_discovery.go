@@ -45,6 +45,12 @@ func (c *TeamsClient) refreshThreads(ctx context.Context) error {
 		if !ok || strings.TrimSpace(thread.ID) == "" || strings.TrimSpace(thread.ConversationID) == "" {
 			continue
 		}
+		// Teams internal system streams (drafts, mentions, annotations, call
+		// logs, ...) are not real conversations; don't surface new portals for
+		// them. The self-chat "notes" is a real chat and is kept.
+		if isNonPollableSystemStream(thread.ID) {
+			continue
+		}
 		// Enterprise conversations don't include member data; resolve DM
 		// names from the profile table using the thread ID.
 		if thread.IsOneToOne && thread.RoomName == "" {
@@ -265,7 +271,7 @@ func (c *TeamsClient) buildGroupChatName(ctx context.Context, threadID string, s
 // applyStructuredRoomNames adds type prefixes (DM:, Group:, Meeting:) to room
 // names, resolves Team->Channel hierarchy via Graph API, and assigns clean
 // names to system streams.
-func (c *TeamsClient) applyStructuredRoomNames(ctx context.Context) {
+func (c *TeamsClient) applyStructuredRoomNames(ctx context.Context, channelMap map[string]graph.ChannelInfo) {
 	if c == nil || c.Main == nil || c.Main.DB == nil || c.Login == nil {
 		return
 	}
@@ -273,9 +279,6 @@ func (c *TeamsClient) applyStructuredRoomNames(ctx context.Context) {
 	if err != nil {
 		return
 	}
-
-	// Fetch team/channel mapping from Graph API.
-	channelMap := c.fetchTeamChannelMap(ctx)
 
 	for _, th := range threads {
 		threadID := strings.TrimSpace(th.ThreadID)
@@ -364,11 +367,16 @@ func (c *TeamsClient) applyStructuredRoomNames(ctx context.Context) {
 		th.Name = newName
 		_ = c.Main.DB.ThreadState.Upsert(ctx, th)
 		chatInfo := &bridgev2.ChatInfo{Name: &newName}
-		// Set parent space for channels.
+		// Set parent space and topic (channel description) for channels.
 		if strings.Contains(threadID, "@thread.tacv2") {
-			if info, ok := channelMap[threadID]; ok && info.TeamID != "" {
-				parentID := teamPortalID(info.TeamID)
-				chatInfo.ParentID = &parentID
+			if info, ok := channelMap[threadID]; ok {
+				if info.TeamID != "" {
+					parentID := teamPortalID(info.TeamID)
+					chatInfo.ParentID = &parentID
+				}
+				if desc := strings.TrimSpace(info.Description); desc != "" {
+					chatInfo.Topic = &desc
+				}
 			}
 		}
 		c.queueRemoteEvent(&simplevent.ChatResync{
@@ -477,6 +485,10 @@ func systemStreamName(threadID string) string {
 		return "Annotations"
 	case strings.Contains(threadID, "teamsstream_threads"):
 		return "Threads"
+	case strings.Contains(threadID, "teamsstream_drafts"):
+		return "Drafts"
+	case strings.Contains(threadID, "teamsstream_mentions"):
+		return "Mentions"
 	default:
 		return ""
 	}
@@ -495,43 +507,83 @@ func teamPortalID(teamID string) networkid.PortalID {
 	return networkid.PortalID("team:" + strings.TrimSpace(teamID))
 }
 
-// syncTeamSpaces emits ChatResync events for each joined Team as a Matrix space.
-func (c *TeamsClient) syncTeamSpaces(ctx context.Context) {
-	if c == nil || c.Meta == nil {
+// syncTeamSpaces emits ChatResync events for each Team as a Matrix space. Team
+// names come from me/joinedTeams and, as a fallback, from CHANNELMAP (which
+// carries the team name for every discovered channel) so a team whose channels
+// the user sees but which me/joinedTeams omits still gets a proper name instead
+// of "Chat"/"Team". Resolved names are cached for teamSpaceChatInfo.
+func (c *TeamsClient) syncTeamSpaces(ctx context.Context, channelMap map[string]graph.ChannelInfo) {
+	if c == nil || c.Meta == nil || c.Login == nil {
 		return
 	}
-	gc, err := c.getGraphClient(ctx)
-	if err != nil {
-		return
+	names := make(map[string]string)
+	if gc, err := c.getGraphClient(ctx); err == nil {
+		if teams, err := gc.ListJoinedTeams(ctx); err == nil {
+			for _, team := range teams {
+				if id := strings.TrimSpace(team.ID); id != "" {
+					if dn := strings.TrimSpace(team.DisplayName); dn != "" {
+						names[id] = dn
+					} else if _, ok := names[id]; !ok {
+						names[id] = ""
+					}
+				}
+			}
+		} else {
+			zerolog.Ctx(ctx).Debug().Err(err).Msg("Failed to fetch joined teams for space sync")
+		}
 	}
-	teams, err := gc.ListJoinedTeams(ctx)
-	if err != nil {
-		zerolog.Ctx(ctx).Debug().Err(err).Msg("Failed to fetch joined teams for space sync")
-		return
-	}
-
-	for _, team := range teams {
-		if strings.TrimSpace(team.ID) == "" {
+	// Merge team names discovered via channels (only fill gaps).
+	for _, info := range channelMap {
+		id := strings.TrimSpace(info.TeamID)
+		if id == "" {
 			continue
 		}
-		portalID := teamPortalID(team.ID)
-		spaceType := database.RoomTypeSpace
-		name := strings.TrimSpace(team.DisplayName)
+		if names[id] == "" {
+			if tn := strings.TrimSpace(info.TeamName); tn != "" {
+				names[id] = tn
+			}
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	c.cacheTeamNames(names)
+	spaceType := database.RoomTypeSpace
+	for teamID, teamName := range names {
+		name := teamName
 		if name == "" {
 			name = "Team"
 		}
-		chatInfo := &bridgev2.ChatInfo{
-			Name: &name,
-			Type: &spaceType,
-		}
+		chatInfo := &bridgev2.ChatInfo{Name: &name, Type: &spaceType}
 		c.queueRemoteEvent(&simplevent.ChatResync{
 			EventMeta: simplevent.EventMeta{
 				Type:         bridgev2.RemoteEventChatResync,
-				PortalKey:    networkid.PortalKey{ID: portalID, Receiver: c.Login.ID},
+				PortalKey:    networkid.PortalKey{ID: teamPortalID(teamID), Receiver: c.Login.ID},
 				CreatePortal: true,
 				Timestamp:    time.Now().UTC(),
 			},
 			ChatInfo: chatInfo,
 		})
 	}
+}
+
+// cacheTeamNames merges resolved team display names into the client cache.
+func (c *TeamsClient) cacheTeamNames(names map[string]string) {
+	c.teamNamesMu.Lock()
+	defer c.teamNamesMu.Unlock()
+	if c.teamNames == nil {
+		c.teamNames = make(map[string]string)
+	}
+	for id, name := range names {
+		if strings.TrimSpace(name) != "" {
+			c.teamNames[id] = name
+		}
+	}
+}
+
+// cachedTeamName returns a cached team display name, or "".
+func (c *TeamsClient) cachedTeamName(teamID string) string {
+	c.teamNamesMu.Lock()
+	defer c.teamNamesMu.Unlock()
+	return c.teamNames[teamID]
 }
