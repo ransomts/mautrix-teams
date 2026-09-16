@@ -457,6 +457,44 @@ func TestProfileUpsertGet(t *testing.T) {
 	}
 }
 
+func TestProfileList(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	var q *ProfileQuery
+	if _, err := q.List(ctx); err != errMissingDB {
+		t.Errorf("nil query List err = %v, want errMissingDB", err)
+	}
+	got, err := db.Profile.List(ctx)
+	if err != nil || len(got) != 0 {
+		t.Errorf("empty List = %+v, %v; want none", got, err)
+	}
+
+	now := time.Now()
+	for id, name := range map[string]string{"8:orgid:alice": "Alice", "8:orgid:bob": "Bob"} {
+		if err := db.Profile.Upsert(ctx, id, name, now); err != nil {
+			t.Fatalf("upsert %s: %v", id, err)
+		}
+	}
+	// Profiles of another bridge are not listed.
+	other := &ProfileQuery{BridgeID: "other", Database: db.Database}
+	if err := other.Upsert(ctx, "8:orgid:carol", "Carol", now); err != nil {
+		t.Fatalf("upsert other bridge: %v", err)
+	}
+
+	got, err = db.Profile.List(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	names := map[string]string{}
+	for _, p := range got {
+		names[p.TeamsUserID] = p.DisplayName
+	}
+	if len(names) != 2 || names["8:orgid:alice"] != "Alice" || names["8:orgid:bob"] != "Bob" {
+		t.Errorf("List = %v, want alice and bob only", names)
+	}
+}
+
 func TestConsumptionHorizonMissingDB(t *testing.T) {
 	ctx := context.Background()
 	var q *ConsumptionHorizonQuery

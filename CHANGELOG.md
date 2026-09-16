@@ -5,6 +5,7 @@ Entries below cover changes made in this fork only.
 
 ## Unreleased
 
+* Ghost display names now follow the profile table: a ghost first seen through a reaction or read receipt was named with its raw Teams ID (`8:orgid:…`) and never renamed once a message revealed the name. Messages now rename the ghost when they update the profile, a repair pass runs on connect, and a message without a sender name no longer overwrites a known name in the profile table.
 * New login flow: "Microsoft account (device code)". Sign in with a one-time code at microsoft.com/devicelogin using a public client (default: the Teams desktop client ID), which yields a refresh token with the tenant's normal sliding lifetime (90 days by default) instead of the 24-hour token lifted from the Teams web app. Refreshes for such logins use the login's own client ID, scope and tenant token endpoint. New config keys: `network.device_code_client_id`, `network.device_code_scope`, `network.device_code_graph_scope`.
 * `ProfileQuery.GetByTeamsUserID` returns `(nil, nil)` for an unknown user instead of `sql.ErrNoRows`, which made ghost user-info lookups fail for users the bridge had not seen.
 * Added a test suite for `pkg/teamsdb` (schema upgrade, thread state, profiles, consumption horizons, per-login and per-bridge scoping) using a temporary SQLite database.

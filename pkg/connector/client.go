@@ -135,6 +135,9 @@ func (c *TeamsClient) Connect(ctx context.Context) {
 	c.apiMu.Unlock()
 	log.Info().Str("teams_user_id", c.Meta.TeamsUserID).Msg("Connected to Teams")
 	c.Login.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
+	// Ghosts named before their profile was known keep the raw Teams ID
+	// until something renames them; do that before events start flowing.
+	c.syncGhostNamesFromProfiles(ctx)
 	c.startSyncLoop()
 }
 

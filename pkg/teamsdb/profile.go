@@ -83,6 +83,33 @@ func (pq *ProfileQuery) ListTeamsUserIDs(ctx context.Context) ([]string, error) 
 	return out, rows.Err()
 }
 
+// List returns every profile known to this bridge.
+func (pq *ProfileQuery) List(ctx context.Context) ([]*Profile, error) {
+	if pq == nil || pq.Database == nil {
+		return nil, errMissingDB
+	}
+	rows, err := pq.Database.Query(ctx, `
+		SELECT teams_user_id, display_name, last_seen_ts
+		FROM teams_profile
+		WHERE bridge_id=$1
+	`, pq.BridgeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Profile
+	for rows.Next() {
+		p, err := pq.scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		if p != nil {
+			out = append(out, p)
+		}
+	}
+	return out, rows.Err()
+}
+
 func (pq *ProfileQuery) scan(row dbutil.Scannable) (*Profile, error) {
 	if row == nil {
 		return nil, nil

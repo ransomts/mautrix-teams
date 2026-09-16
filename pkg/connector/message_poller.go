@@ -224,10 +224,15 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 		if displayName == "" {
 			displayName = strings.TrimSpace(msg.TokenDisplayName)
 		}
-		if displayName == "" {
+		if displayName != "" {
+			_ = c.Main.DB.Profile.Upsert(ctx, senderID, displayName, now)
+			c.syncGhostName(ctx, senderID, displayName)
+		} else if profile, err := c.Main.DB.Profile.GetByTeamsUserID(ctx, senderID); err == nil && profile != nil && strings.TrimSpace(profile.DisplayName) != "" {
+			// A message that carries no name must not overwrite a known one.
+			displayName = strings.TrimSpace(profile.DisplayName)
+		} else {
 			displayName = senderID
 		}
-		_ = c.Main.DB.Profile.Upsert(ctx, senderID, displayName, now)
 		c.trackKnownUser(senderID)
 		msg.SenderName = displayName
 
