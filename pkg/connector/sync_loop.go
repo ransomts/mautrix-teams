@@ -368,7 +368,7 @@ func (c *TeamsClient) ensureValidSkypeToken(ctx context.Context) error {
 	if skResult.AmsURL != "" {
 		c.Meta.RegionAmsURL = skResult.AmsURL
 	}
-	c.Login.RemoteName = c.Meta.TeamsUserID
+	c.Login.RemoteName = c.remoteDisplayName(ctx)
 	c.refreshCachedConsumerTokenLocked()
 
 	log.Info().

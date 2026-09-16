@@ -211,6 +211,9 @@ func (c *TeamsClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) 
 		return nil, err
 	}
 	if row == nil {
+		if teamID, ok := strings.CutPrefix(threadID, "team:"); ok {
+			return c.teamSpaceChatInfo(ctx, teamID, portal), nil
+		}
 		// Portal can exist before we have a discovery row; return minimal info.
 		name := "Chat"
 		return &bridgev2.ChatInfo{Name: &name}, nil
@@ -573,6 +576,42 @@ func (c *TeamsClient) log() zerolog.Logger {
 		l = l.With().Str("login_id", string(c.Login.ID)).Logger()
 	}
 	return l
+}
+
+// teamSpaceChatInfo describes a team's space portal: the team's display
+// name from Graph, else the name the portal already has, else "Team".
+func (c *TeamsClient) teamSpaceChatInfo(ctx context.Context, teamID string, portal *bridgev2.Portal) *bridgev2.ChatInfo {
+	spaceType := database.RoomTypeSpace
+	name := "Team"
+	if portal != nil && strings.TrimSpace(portal.Name) != "" {
+		name = portal.Name
+	}
+	if gc, err := c.getGraphClient(ctx); err == nil {
+		if teams, err := gc.ListJoinedTeams(ctx); err == nil {
+			for _, team := range teams {
+				if strings.TrimSpace(team.ID) == teamID && strings.TrimSpace(team.DisplayName) != "" {
+					name = strings.TrimSpace(team.DisplayName)
+					break
+				}
+			}
+		}
+	}
+	return &bridgev2.ChatInfo{Name: &name, Type: &spaceType}
+}
+
+// remoteDisplayName is the name shown for this login (personal space name,
+// login listings): the user's Teams display name when known, else the ID.
+func (c *TeamsClient) remoteDisplayName(ctx context.Context) string {
+	id := ""
+	if c.Meta != nil {
+		id = c.Meta.TeamsUserID
+	}
+	if c.Main != nil && c.Main.DB != nil && id != "" {
+		if profile, err := c.Main.DB.Profile.GetByTeamsUserID(ctx, id); err == nil && profile != nil && strings.TrimSpace(profile.DisplayName) != "" {
+			return strings.TrimSpace(profile.DisplayName)
+		}
+	}
+	return id
 }
 
 // saveLogin persists login metadata. It is a no-op when the login is not
