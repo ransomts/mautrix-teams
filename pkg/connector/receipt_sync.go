@@ -51,26 +51,44 @@ func (c *TeamsClient) pollConsumptionHorizons(ctx context.Context, th *teamsdb.T
 		return nil
 	}
 
-	var remoteID string
-	var remoteHorizon *model.ConsumptionHorizon
-	nonSelfCount := 0
+	// Group chats have one horizon per participant; bridge each of them.
+	var lastErr error
+	for _, remote := range remoteHorizons(resp, selfID, threadID) {
+		if err := c.syncParticipantHorizon(ctx, log, threadID, selfID, remote.id, remote.horizon); err != nil {
+			log.Debug().Err(err).Str("remote_user_id", remote.id).Msg("consumption horizon sync failed")
+			lastErr = err
+		}
+	}
+	return lastErr
+}
+
+type remoteHorizon struct {
+	id      string
+	horizon *model.ConsumptionHorizon
+}
+
+// remoteHorizons returns the horizons of every participant other than the
+// bridge user, ignoring thread pseudo-participants.
+func remoteHorizons(resp *model.ConsumptionHorizonsResponse, selfID string, threadID string) []remoteHorizon {
+	if resp == nil {
+		return nil
+	}
+	out := make([]remoteHorizon, 0, len(resp.Horizons))
 	for idx := range resp.Horizons {
 		entry := &resp.Horizons[idx]
 		entryID := model.NormalizeTeamsUserID(entry.ID)
 		if entryID == "" || entryID == selfID || strings.EqualFold(entryID, threadID) || isLikelyThreadID(entryID) {
 			continue
 		}
-		nonSelfCount++
-		if nonSelfCount > 1 {
-			return nil
-		}
-		remoteID = entryID
-		remoteHorizon = entry
+		out = append(out, remoteHorizon{id: entryID, horizon: entry})
 	}
+	return out
+}
+
+func (c *TeamsClient) syncParticipantHorizon(ctx context.Context, log zerolog.Logger, threadID string, selfID string, remoteID string, remoteHorizon *model.ConsumptionHorizon) error {
 	if remoteHorizon == nil || remoteID == "" {
 		return nil
 	}
-
 	latestReadTS, ok := model.ParseConsumptionHorizonLatestReadTS(remoteHorizon.ConsumptionHorizon)
 	if !ok || latestReadTS <= 0 {
 		return nil

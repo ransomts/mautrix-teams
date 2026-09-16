@@ -11,8 +11,14 @@ func (c *TeamsClient) ensureValidGraphToken(ctx context.Context) error {
 	if c == nil || c.Meta == nil || c.Login == nil {
 		return errors.New("missing client/login metadata")
 	}
-	if c.Meta.GraphTokenValid(time.Now().UTC()) {
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	now := time.Now().UTC()
+	if c.Meta.GraphTokenValid(now) {
 		return nil
+	}
+	if err := c.graphRefreshFail.blocked(now); err != nil {
+		return err
 	}
 	refreshToken := strings.TrimSpace(c.Meta.RefreshToken)
 	if refreshToken == "" {
@@ -23,11 +29,15 @@ func (c *TeamsClient) ensureValidGraphToken(ctx context.Context) error {
 
 	refreshed, err := refreshAccessTokenForGraphScope(ctx, authClient, refreshToken)
 	if err != nil {
+		c.graphRefreshFail.record(now, err)
 		return err
 	}
 	if refreshed == nil || strings.TrimSpace(refreshed.GraphAccessToken) == "" || refreshed.GraphExpiresAt == 0 {
-		return errors.New("graph token refresh succeeded but did not return graph access token")
+		err := errors.New("graph token refresh succeeded but did not return graph access token")
+		c.graphRefreshFail.record(now, err)
+		return err
 	}
+	c.graphRefreshFail.reset()
 
 	if rt := strings.TrimSpace(refreshed.RefreshToken); rt != "" {
 		c.Meta.RefreshToken = rt
@@ -35,5 +45,5 @@ func (c *TeamsClient) ensureValidGraphToken(ctx context.Context) error {
 	c.Meta.GraphAccessToken = strings.TrimSpace(refreshed.GraphAccessToken)
 	c.Meta.GraphExpiresAt = refreshed.GraphExpiresAt
 
-	return c.Login.Save(ctx)
+	return c.saveLogin(ctx)
 }

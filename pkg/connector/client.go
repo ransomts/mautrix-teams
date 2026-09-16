@@ -33,8 +33,17 @@ type TeamsClient struct {
 
 	loggedIn atomic.Bool
 
+	apiMu  sync.RWMutex
 	api    TeamsAPI
 	events EventSink
+
+	// tokenMu serialises token refreshes and guards the token fields of Meta
+	// (SkypeToken, RefreshToken, GraphAccessToken and their expiries), which
+	// are otherwise written from the sync loop, the presence loop and Matrix
+	// event handlers concurrently.
+	tokenMu          sync.Mutex
+	skypeRefreshFail refreshFailure
+	graphRefreshFail refreshFailure
 
 	consumerHTTPMu sync.Mutex
 	consumerHTTP   *http.Client
@@ -112,8 +121,10 @@ func (c *TeamsClient) Connect(ctx context.Context) {
 	}
 
 	c.loggedIn.Store(true)
+	c.apiMu.Lock()
 	c.api = c.newConsumer()
 	c.events = &loginEventSink{login: c.Login}
+	c.apiMu.Unlock()
 	log.Info().Str("teams_user_id", c.Meta.TeamsUserID).Msg("Connected to Teams")
 	c.Login.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
 	c.startSyncLoop()
@@ -135,11 +146,31 @@ func (c *TeamsClient) IsLoggedIn() bool {
 			c.Meta = meta
 		}
 	}
-	if c.Meta == nil || c.Meta.SkypeToken == "" || c.Meta.SkypeTokenExpiresAt == 0 {
+	token, expiresAtUnix := c.skypeTokenSnapshot()
+	if token == "" || expiresAtUnix == 0 {
 		return false
 	}
-	expiresAt := time.Unix(c.Meta.SkypeTokenExpiresAt, 0).UTC()
+	expiresAt := time.Unix(expiresAtUnix, 0).UTC()
 	return time.Now().UTC().Add(auth.SkypeTokenExpirySkew).Before(expiresAt)
+}
+
+// skypeTokenSnapshot returns the current Skype token and its expiry under tokenMu.
+func (c *TeamsClient) skypeTokenSnapshot() (string, int64) {
+	if c == nil {
+		return "", 0
+	}
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	if c.Meta == nil {
+		return "", 0
+	}
+	return c.Meta.SkypeToken, c.Meta.SkypeTokenExpiresAt
+}
+
+// skypeToken returns the current Skype token under tokenMu.
+func (c *TeamsClient) skypeToken() string {
+	token, _ := c.skypeTokenSnapshot()
+	return token
 }
 
 func (c *TeamsClient) LogoutRemote(ctx context.Context) {
@@ -150,7 +181,7 @@ func (c *TeamsClient) LogoutRemote(ctx context.Context) {
 	if meta, ok := c.Login.Metadata.(*teamsid.UserLoginMetadata); ok && meta != nil {
 		*meta = teamsid.UserLoginMetadata{}
 	}
-	_ = c.Login.Save(ctx)
+	_ = c.saveLogin(ctx)
 	c.loggedIn.Store(false)
 }
 
@@ -195,7 +226,7 @@ func (c *TeamsClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) 
 
 	// Fetch fresh conversation data for topic and members.
 	if err := c.ensureValidSkypeToken(ctx); err == nil {
-		convs, convErr := c.getAPI().ListConversations(ctx, c.Meta.SkypeToken)
+		convs, convErr := c.getAPI().ListConversations(ctx, c.skypeToken())
 		if convErr == nil {
 			for _, conv := range convs {
 				thread, ok := conv.NormalizeForSelf(c.Meta.TeamsUserID)
@@ -429,26 +460,58 @@ func (c *TeamsClient) newConsumer() *consumerclient.Client {
 	if c.Login != nil {
 		consumer.Log = &c.Login.Log
 	}
-	if c.Meta != nil {
-		consumer.Token = c.Meta.SkypeToken
-		// Override consumer API URLs with enterprise region-specific URLs
-		// when available from the skypetoken regionGtms response.
-		if chatSvc := strings.TrimSpace(c.Meta.RegionChatServiceURL); chatSvc != "" {
-			chatSvc = strings.TrimRight(chatSvc, "/")
-			consumer.ConversationsURL = chatSvc + "/v1/users/ME/conversations"
-			consumer.MessagesURL = chatSvc + "/v1/users/ME/conversations"
-			consumer.SendMessagesURL = chatSvc + "/v1/users/ME/conversations"
-			consumer.ConsumptionHorizonsURL = chatSvc + "/v1/threads"
-		}
-	}
+	c.applyTokenToConsumer(consumer)
 	return consumer
 }
 
+// applyTokenToConsumer copies the current Skype token and region URLs onto a
+// consumer client. It is called when the client is built and after every
+// token refresh, so the cached API client never keeps a stale token.
+func (c *TeamsClient) applyTokenToConsumer(consumer *consumerclient.Client) {
+	if c == nil || consumer == nil {
+		return
+	}
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	c.applyTokenToConsumerLocked(consumer)
+}
+
+func (c *TeamsClient) applyTokenToConsumerLocked(consumer *consumerclient.Client) {
+	if c.Meta == nil || consumer == nil {
+		return
+	}
+	consumer.Token = c.Meta.SkypeToken
+	// Override consumer API URLs with enterprise region-specific URLs
+	// when available from the skypetoken regionGtms response.
+	if chatSvc := strings.TrimSpace(c.Meta.RegionChatServiceURL); chatSvc != "" {
+		chatSvc = strings.TrimRight(chatSvc, "/")
+		consumer.ConversationsURL = chatSvc + "/v1/users/ME/conversations"
+		consumer.MessagesURL = chatSvc + "/v1/users/ME/conversations"
+		consumer.SendMessagesURL = chatSvc + "/v1/users/ME/conversations"
+		consumer.ConsumptionHorizonsURL = chatSvc + "/v1/threads"
+	}
+}
+
 func (c *TeamsClient) getAPI() TeamsAPI {
-	if c.api != nil {
-		return c.api
+	c.apiMu.RLock()
+	api := c.api
+	c.apiMu.RUnlock()
+	if api != nil {
+		return api
 	}
 	return c.newConsumer()
+}
+
+// refreshCachedConsumerToken pushes the latest Skype token into the cached
+// consumer client, if that is what the cached API is. Must be called with
+// tokenMu held.
+func (c *TeamsClient) refreshCachedConsumerTokenLocked() {
+	c.apiMu.RLock()
+	api := c.api
+	c.apiMu.RUnlock()
+	if consumer, ok := api.(*consumerclient.Client); ok {
+		c.applyTokenToConsumerLocked(consumer)
+	}
 }
 
 func (c *TeamsClient) recordSelfMessage(clientMessageID string) {
@@ -506,6 +569,15 @@ func (c *TeamsClient) log() zerolog.Logger {
 		l = l.With().Str("login_id", string(c.Login.ID)).Logger()
 	}
 	return l
+}
+
+// saveLogin persists login metadata. It is a no-op when the login is not
+// attached to a bridge (unit tests), where UserLogin.Save would dereference nil.
+func (c *TeamsClient) saveLogin(ctx context.Context) error {
+	if c == nil || c.Login == nil || c.Login.Bridge == nil {
+		return nil
+	}
+	return c.Login.Save(ctx)
 }
 
 func ptrString(v string) *string { return &v }

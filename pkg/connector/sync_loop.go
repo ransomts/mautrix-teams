@@ -5,6 +5,7 @@ package connector
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -142,7 +143,7 @@ func (c *TeamsClient) longPollLoop(ctx context.Context, initialDiscoverySucceede
 		if err := c.ensureValidSkypeToken(ctx); err != nil {
 			return err
 		}
-		consumer.Token = c.Meta.SkypeToken
+		c.applyTokenToConsumer(consumer)
 
 		events, err := consumer.LongPoll(ctx, endpointID, pollTimeout)
 		if err != nil {
@@ -230,11 +231,64 @@ func (c *TeamsClient) syncOnce(ctx context.Context) error {
 	return nil
 }
 
+// refreshFailure remembers a failed token refresh so that the many callers of
+// ensureValidSkypeToken / ensureValidGraphToken (one per thread poll, per
+// Matrix event, per presence tick) do not each re-hit the identity provider
+// while the refresh token is known to be bad.
+type refreshFailure struct {
+	failures int
+	until    time.Time
+	err      error
+}
+
+const (
+	refreshBackoffBase = 30 * time.Second
+	refreshBackoffMax  = 15 * time.Minute
+)
+
+// isPermanentRefreshError reports whether the identity provider rejected the
+// refresh token itself (expired, revoked, consumed), in which case retrying
+// cannot help until the user logs in again.
+func isPermanentRefreshError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "invalid_grant") || strings.Contains(msg, "interaction_required")
+}
+
+func (f *refreshFailure) record(now time.Time, err error) {
+	f.failures++
+	delay := refreshBackoffBase
+	if f.failures > 1 {
+		delay = refreshBackoffBase * time.Duration(1<<uint(min(f.failures-1, 10)))
+	}
+	if delay > refreshBackoffMax || isPermanentRefreshError(err) {
+		delay = refreshBackoffMax
+	}
+	f.until = now.Add(delay)
+	f.err = err
+}
+
+// blocked returns the cached error while the backoff window is open.
+func (f *refreshFailure) blocked(now time.Time) error {
+	if f.err == nil || !now.Before(f.until) {
+		return nil
+	}
+	return fmt.Errorf("%w (refresh suppressed until %s)", f.err, f.until.UTC().Format(time.RFC3339))
+}
+
+func (f *refreshFailure) reset() {
+	*f = refreshFailure{}
+}
+
 func (c *TeamsClient) ensureValidSkypeToken(ctx context.Context) error {
 	if c == nil || c.Login == nil {
 		return errors.New("missing client/login")
 	}
 	log := c.log()
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
 	if c.Meta == nil {
 		if meta, ok := c.Login.Metadata.(*teamsid.UserLoginMetadata); ok {
 			c.Meta = meta
@@ -251,8 +305,14 @@ func (c *TeamsClient) ensureValidSkypeToken(ctx context.Context) error {
 			log.Trace().Time("expires_at", expiresAt).Msg("Skype token still valid")
 			return nil
 		}
+		if err := c.skypeRefreshFail.blocked(now); err != nil {
+			return err
+		}
 		log.Info().Time("expired_at", expiresAt).Msg("Skype token expired, refreshing")
 	} else {
+		if err := c.skypeRefreshFail.blocked(now); err != nil {
+			return err
+		}
 		log.Info().Msg("No Skype token, acquiring")
 	}
 	refresh := strings.TrimSpace(c.Meta.RefreshToken)
@@ -269,6 +329,10 @@ func (c *TeamsClient) ensureValidSkypeToken(ctx context.Context) error {
 
 	state, err := authClient.RefreshAccessToken(ctx, refresh)
 	if err != nil {
+		c.skypeRefreshFail.record(now, err)
+		if isPermanentRefreshError(err) {
+			c.loggedIn.Store(false)
+		}
 		return err
 	}
 	if strings.TrimSpace(state.RefreshToken) != "" {
@@ -277,8 +341,10 @@ func (c *TeamsClient) ensureValidSkypeToken(ctx context.Context) error {
 
 	skResult, err := authClient.AcquireSkypeToken(ctx, state.AccessToken)
 	if err != nil {
+		c.skypeRefreshFail.record(now, err)
 		return err
 	}
+	c.skypeRefreshFail.reset()
 
 	c.Meta.AccessTokenExpiresAt = state.ExpiresAtUnix
 	c.Meta.SkypeToken = skResult.Token
@@ -297,12 +363,13 @@ func (c *TeamsClient) ensureValidSkypeToken(ctx context.Context) error {
 		c.Meta.RegionAmsURL = skResult.AmsURL
 	}
 	c.Login.RemoteName = c.Meta.TeamsUserID
+	c.refreshCachedConsumerTokenLocked()
 
 	log.Info().
 		Str("teams_user_id", c.Meta.TeamsUserID).
 		Time("skype_expires_at", time.Unix(c.Meta.SkypeTokenExpiresAt, 0).UTC()).
 		Msg("Skype token refreshed successfully")
-	if err := c.Login.Save(ctx); err != nil {
+	if err := c.saveLogin(ctx); err != nil {
 		log.Error().Err(err).Msg("Failed to persist refreshed login metadata")
 	}
 	return nil

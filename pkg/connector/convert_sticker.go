@@ -36,7 +36,7 @@ func (c *TeamsClient) convertStickerMessage(ctx context.Context, portal *bridgev
 	skypeToken := ""
 	regionAmsURL := ""
 	if c.Meta != nil {
-		skypeToken = strings.TrimSpace(c.Meta.SkypeToken)
+		skypeToken = strings.TrimSpace(c.skypeToken())
 		regionAmsURL = strings.TrimSpace(c.Meta.RegionAmsURL)
 	}
 

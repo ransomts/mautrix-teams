@@ -263,7 +263,7 @@ func (c *TeamsClient) reuploadInboundAttachments(
 	skypeToken := ""
 	regionAmsURL := ""
 	if c.Meta != nil {
-		skypeToken = strings.TrimSpace(c.Meta.SkypeToken)
+		skypeToken = strings.TrimSpace(c.skypeToken())
 		regionAmsURL = strings.TrimSpace(c.Meta.RegionAmsURL)
 	}
 
@@ -373,7 +373,7 @@ func (c *TeamsClient) reuploadInlineImages(
 	if len(images) == 0 || c == nil || c.Meta == nil {
 		return nil
 	}
-	skypeToken := strings.TrimSpace(c.Meta.SkypeToken)
+	skypeToken := strings.TrimSpace(c.skypeToken())
 	if skypeToken == "" {
 		return nil
 	}

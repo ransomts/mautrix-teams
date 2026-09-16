@@ -826,3 +826,84 @@ func TestListMessagesMentionsParsing(t *testing.T) {
 		t.Fatalf("unexpected mention ItemID: %q", msgs[0].Mentions[0].ItemID)
 	}
 }
+
+func TestListMessagesPagesBackToCursor(t *testing.T) {
+	origPageSize := listMessagesPageSize
+	listMessagesPageSize = 2
+	defer func() { listMessagesPageSize = origPageSize }()
+
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("startTime") == "" {
+			// Newest page: seq 6 and 5, both above the caller's cursor (3).
+			_, _ = w.Write([]byte(`{"messages":[
+				{"id":"m6","sequenceId":6,"originalarrivaltime":"2024-01-01T00:00:06Z","content":{"text":"six"}},
+				{"id":"m5","sequenceId":5,"originalarrivaltime":"2024-01-01T00:00:05Z","content":{"text":"five"}}]}`))
+			return
+		}
+		// Older page: reaches the cursor, so paging stops here.
+		_, _ = w.Write([]byte(`{"messages":[
+			{"id":"m4","sequenceId":4,"originalarrivaltime":"2024-01-01T00:00:04Z","content":{"text":"four"}},
+			{"id":"m3","sequenceId":3,"originalarrivaltime":"2024-01-01T00:00:03Z","content":{"text":"three"}}]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	client.MessagesURL = server.URL + "/conversations"
+	client.Token = "token123"
+
+	msgs, err := client.ListMessages(context.Background(), "19:thread@thread.v2", "3")
+	if err != nil {
+		t.Fatalf("ListMessages failed: %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("expected 2 page requests, got %d: %v", len(requests), requests)
+	}
+	if !strings.Contains(requests[0], "pageSize=2") || strings.Contains(requests[0], "startTime") {
+		t.Fatalf("unexpected first request query: %q", requests[0])
+	}
+	if !strings.Contains(requests[1], "startTime=2024-01-01T00%3A00%3A05.000Z") {
+		t.Fatalf("second request should page back from the oldest timestamp, got %q", requests[1])
+	}
+	if len(msgs) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(msgs))
+	}
+	for i, want := range []string{"m3", "m4", "m5", "m6"} {
+		if msgs[i].MessageID != want {
+			t.Fatalf("unexpected ordering at %d: got %s want %s", i, msgs[i].MessageID, want)
+		}
+	}
+}
+
+func TestListMessagesWithoutCursorFetchesOnePage(t *testing.T) {
+	origPageSize := listMessagesPageSize
+	listMessagesPageSize = 2
+	defer func() { listMessagesPageSize = origPageSize }()
+
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"messages":[
+			{"id":"m2","sequenceId":2,"originalarrivaltime":"2024-01-01T00:00:02Z","content":{"text":"two"}},
+			{"id":"m1","sequenceId":1,"originalarrivaltime":"2024-01-01T00:00:01Z","content":{"text":"one"}}]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	client.MessagesURL = server.URL + "/conversations"
+	client.Token = "token123"
+
+	msgs, err := client.ListMessages(context.Background(), "19:thread@thread.v2", "")
+	if err != nil {
+		t.Fatalf("ListMessages failed: %v", err)
+	}
+	if hits != 1 {
+		t.Fatalf("expected a single page without a cursor, got %d requests", hits)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+}

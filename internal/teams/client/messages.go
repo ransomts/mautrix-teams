@@ -59,6 +59,21 @@ type remoteMessage struct {
 	ComposeTime            string          `json:"composetime"`
 }
 
+// listMessagesPageSize is the page size requested from the Teams messages
+// endpoint (the API caps it at 200). It is a variable so tests can shrink it.
+var listMessagesPageSize = 200
+
+// listMessagesMaxCatchupPages bounds how far ListMessages pages back when
+// looking for the caller's cursor, so a very busy thread cannot turn one poll
+// into an unbounded history walk.
+const listMessagesMaxCatchupPages = 10
+
+// ListMessages returns recent messages in a conversation, sorted by sequence
+// ID ascending. When sinceSequence is non-empty, it keeps paging backwards
+// until the returned set reaches that sequence (or the catch-up page limit is
+// hit), so messages that arrived between two polls are not lost when more
+// than one page's worth came in. Messages at or below sinceSequence may be
+// included; callers filter them.
 func (c *Client) ListMessages(ctx context.Context, conversationID string, sinceSequence string) ([]model.RemoteMessage, error) {
 	if c == nil || c.HTTP == nil {
 		return nil, ErrMissingHTTPClient
@@ -69,72 +84,57 @@ func (c *Client) ListMessages(ctx context.Context, conversationID string, sinceS
 	if conversationID == "" {
 		return nil, errors.New("missing conversation id")
 	}
-
-	var payload struct {
-		Messages []remoteMessage `json:"messages"`
-	}
-	baseURL := c.MessagesURL
-	if baseURL == "" {
-		baseURL = defaultMessagesURL
-	}
-	baseURL = strings.TrimSuffix(baseURL, "/")
-	messagesURL := fmt.Sprintf("%s/%s/messages", baseURL, url.PathEscape(conversationID))
-	if err := c.fetchJSON(ctx, messagesURL, &payload); err != nil {
-		return nil, err
+	sinceSequence = strings.TrimSpace(sinceSequence)
+	pageSize := listMessagesPageSize
+	if pageSize <= 0 {
+		pageSize = 200
 	}
 
-	result := make([]model.RemoteMessage, 0, len(payload.Messages))
-	seen := make(map[string]struct{}, len(payload.Messages))
-	for _, msg := range payload.Messages {
-		msgID := strings.TrimSpace(msg.ID)
-		if msgID != "" {
-			if _, ok := seen[msgID]; ok {
-				continue
-			}
-			seen[msgID] = struct{}{}
-		}
-
-		sequenceID, err := normalizeSequenceID(msg.SequenceID)
+	result := make([]model.RemoteMessage, 0, pageSize)
+	seen := make(map[string]struct{}, pageSize)
+	cursor := ""
+	for page := 0; page < listMessagesMaxCatchupPages; page++ {
+		payload, err := c.fetchMessagesPage(ctx, conversationID, pageSize, cursor)
 		if err != nil {
+			if page > 0 {
+				if c.Log != nil {
+					c.Log.Warn().Err(err).Str("conversation_id", conversationID).Int("page", page).Msg("catch-up page fetch failed, returning partial results")
+				}
+				break
+			}
 			return nil, err
 		}
-		senderID := model.NormalizeTeamsUserID(model.ExtractSenderID(msg.From))
-		if senderID == "" && c.Log != nil {
-			c.Log.Debug().
-				Str("message_id", msg.ID).
-				Msg("teams message missing sender id")
+		if len(payload) == 0 {
+			break
 		}
-		content := model.ExtractContent(msg.Content)
-		// Extract mentions by combining HTML spans with MRI data from properties.
-		var bodyRaw string
-		if jsonErr := json.Unmarshal(msg.Content, &bodyRaw); jsonErr != nil {
-			bodyRaw = content.Body
-		}
-		htmlMentions := model.ParseMentionsFromHTML(bodyRaw)
-		mriMap := model.ExtractMentionMRIs(msg.Properties)
-		mentions := model.ResolveMentions(htmlMentions, mriMap)
 
-		result = append(result, model.RemoteMessage{
-			MessageID:        msg.ID,
-			ClientMessageID:  msg.ClientMessageID,
-			SequenceID:       sequenceID,
-			SenderID:         senderID,
-			IMDisplayName:    msg.IMDisplayName,
-			TokenDisplayName: msg.FromDisplayNameInToken,
-			Timestamp:        model.ParseTimestamp(msg.OriginalArrivalTime),
-			Body:             content.Body,
-			FormattedBody:    content.FormattedBody,
-			GIFs:             content.GIFs,
-			InlineImages:     content.InlineImages,
-			PropertiesFiles:  model.ExtractFilesProperty(msg.Properties),
-			PropertiesRaw:    msg.Properties,
-			Reactions:        model.ExtractReactions(msg.Properties),
-			MessageType:      strings.TrimSpace(msg.MessageType),
-			SkypeEditedID:    strings.TrimSpace(msg.SkypeEditedID),
-			ReplyToID:        model.ExtractReplyToID(msg.Content),
-			ThreadRootID:     model.ExtractThreadRootID(msg.Properties),
-			Mentions:         mentions,
-		})
+		reachedCursor := sinceSequence == ""
+		var oldestTS string
+		pageBatch := 0
+		for _, msg := range payload {
+			converted, ok, err := c.convertRemoteMessage(msg, seen)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				continue
+			}
+			pageBatch++
+			result = append(result, converted)
+			if sinceSequence != "" && model.CompareSequenceID(converted.SequenceID, sinceSequence) <= 0 {
+				reachedCursor = true
+			}
+			if !converted.Timestamp.IsZero() {
+				tsStr := converted.Timestamp.UTC().Format("2006-01-02T15:04:05.000Z")
+				if oldestTS == "" || tsStr < oldestTS {
+					oldestTS = tsStr
+				}
+			}
+		}
+		if reachedCursor || pageBatch < pageSize || oldestTS == "" {
+			break
+		}
+		cursor = oldestTS
 	}
 
 	sort.Slice(result, func(i, j int) bool {
@@ -144,8 +144,84 @@ func (c *Client) ListMessages(ctx context.Context, conversationID string, sinceS
 	return result, nil
 }
 
-// ListMessagesPaginated fetches messages with pagination parameters.
-// pageSize controls how many messages to fetch, startTime is an ISO timestamp to fetch messages before.
+// fetchMessagesPage requests one page of raw messages. startTime, when set,
+// asks for messages before that ISO timestamp.
+func (c *Client) fetchMessagesPage(ctx context.Context, conversationID string, pageSize int, startTime string) ([]remoteMessage, error) {
+	baseURL := c.MessagesURL
+	if baseURL == "" {
+		baseURL = defaultMessagesURL
+	}
+	baseURL = strings.TrimSuffix(baseURL, "/")
+	messagesURL := fmt.Sprintf("%s/%s/messages?pageSize=%d", baseURL, url.PathEscape(conversationID), pageSize)
+	if startTime != "" {
+		messagesURL += "&startTime=" + url.QueryEscape(startTime)
+	}
+	var payload struct {
+		Messages []remoteMessage `json:"messages"`
+	}
+	if err := c.fetchJSON(ctx, messagesURL, &payload); err != nil {
+		return nil, err
+	}
+	return payload.Messages, nil
+}
+
+// convertRemoteMessage turns a raw API message into a model.RemoteMessage.
+// It returns ok=false for duplicates already present in seen.
+func (c *Client) convertRemoteMessage(msg remoteMessage, seen map[string]struct{}) (model.RemoteMessage, bool, error) {
+	msgID := strings.TrimSpace(msg.ID)
+	if msgID != "" && seen != nil {
+		if _, ok := seen[msgID]; ok {
+			return model.RemoteMessage{}, false, nil
+		}
+		seen[msgID] = struct{}{}
+	}
+
+	sequenceID, err := normalizeSequenceID(msg.SequenceID)
+	if err != nil {
+		return model.RemoteMessage{}, false, err
+	}
+	senderID := model.NormalizeTeamsUserID(model.ExtractSenderID(msg.From))
+	if senderID == "" && c.Log != nil {
+		c.Log.Debug().
+			Str("message_id", msg.ID).
+			Msg("teams message missing sender id")
+	}
+	content := model.ExtractContent(msg.Content)
+	// Extract mentions by combining HTML spans with MRI data from properties.
+	var bodyRaw string
+	if jsonErr := json.Unmarshal(msg.Content, &bodyRaw); jsonErr != nil {
+		bodyRaw = content.Body
+	}
+	htmlMentions := model.ParseMentionsFromHTML(bodyRaw)
+	mriMap := model.ExtractMentionMRIs(msg.Properties)
+	mentions := model.ResolveMentions(htmlMentions, mriMap)
+
+	return model.RemoteMessage{
+		MessageID:        msg.ID,
+		ClientMessageID:  msg.ClientMessageID,
+		SequenceID:       sequenceID,
+		SenderID:         senderID,
+		IMDisplayName:    msg.IMDisplayName,
+		TokenDisplayName: msg.FromDisplayNameInToken,
+		Timestamp:        model.ParseTimestamp(msg.OriginalArrivalTime),
+		Body:             content.Body,
+		FormattedBody:    content.FormattedBody,
+		GIFs:             content.GIFs,
+		InlineImages:     content.InlineImages,
+		PropertiesFiles:  model.ExtractFilesProperty(msg.Properties),
+		PropertiesRaw:    msg.Properties,
+		Reactions:        model.ExtractReactions(msg.Properties),
+		MessageType:      strings.TrimSpace(msg.MessageType),
+		SkypeEditedID:    strings.TrimSpace(msg.SkypeEditedID),
+		ReplyToID:        model.ExtractReplyToID(msg.Content),
+		ThreadRootID:     model.ExtractThreadRootID(msg.Properties),
+		Mentions:         mentions,
+	}, true, nil
+}
+
+// ListMessagesPaginated fetches up to pageSize messages older than startTime
+// (an ISO timestamp; empty means newest first), paging as needed. It is used
+// for history backfill.
 func (c *Client) ListMessagesPaginated(ctx context.Context, conversationID string, pageSize int, startTime string) ([]model.RemoteMessage, error) {
 	if c == nil || c.HTTP == nil {
 		return nil, ErrMissingHTTPClient
@@ -167,89 +243,39 @@ func (c *Client) ListMessagesPaginated(ctx context.Context, conversationID strin
 		pageSize = maxPageSize
 	}
 
-	baseURL := c.MessagesURL
-	if baseURL == "" {
-		baseURL = defaultMessagesURL
-	}
-	baseURL = strings.TrimSuffix(baseURL, "/")
-
 	result := make([]model.RemoteMessage, 0, requested)
 	seen := make(map[string]struct{}, requested)
 	cursor := startTime
 
 	for len(result) < requested {
-		messagesURL := fmt.Sprintf("%s/%s/messages?pageSize=%d", baseURL, url.PathEscape(conversationID), pageSize)
-		if cursor != "" {
-			messagesURL += "&startTime=" + url.QueryEscape(cursor)
-		}
-
-		var payload struct {
-			Messages []remoteMessage `json:"messages"`
-		}
-		if err := c.fetchJSON(ctx, messagesURL, &payload); err != nil {
+		payload, err := c.fetchMessagesPage(ctx, conversationID, pageSize, cursor)
+		if err != nil {
 			if len(result) > 0 {
 				break
 			}
 			return nil, err
 		}
-		if len(payload.Messages) == 0 {
+		if len(payload) == 0 {
 			break
 		}
 
 		var oldestTS string
 		pageBatch := 0
-		for _, msg := range payload.Messages {
-			msgID := strings.TrimSpace(msg.ID)
-			if msgID != "" {
-				if _, ok := seen[msgID]; ok {
-					continue
-				}
-				seen[msgID] = struct{}{}
-			}
-
-			sequenceID, err := normalizeSequenceID(msg.SequenceID)
+		for _, msg := range payload {
+			converted, ok, err := c.convertRemoteMessage(msg, seen)
 			if err != nil {
 				return nil, err
 			}
-			senderID := model.NormalizeTeamsUserID(model.ExtractSenderID(msg.From))
-			content := model.ExtractContent(msg.Content)
-			var bodyRaw string
-			if jsonErr := json.Unmarshal(msg.Content, &bodyRaw); jsonErr != nil {
-				bodyRaw = content.Body
+			if !ok {
+				continue
 			}
-			htmlMentions := model.ParseMentionsFromHTML(bodyRaw)
-			mriMap := model.ExtractMentionMRIs(msg.Properties)
-			mentions := model.ResolveMentions(htmlMentions, mriMap)
-
-			ts := model.ParseTimestamp(msg.OriginalArrivalTime)
-			if !ts.IsZero() {
-				tsStr := ts.UTC().Format("2006-01-02T15:04:05.000Z")
+			if !converted.Timestamp.IsZero() {
+				tsStr := converted.Timestamp.UTC().Format("2006-01-02T15:04:05.000Z")
 				if oldestTS == "" || tsStr < oldestTS {
 					oldestTS = tsStr
 				}
 			}
-
-			result = append(result, model.RemoteMessage{
-				MessageID:        msg.ID,
-				ClientMessageID:  msg.ClientMessageID,
-				SequenceID:       sequenceID,
-				SenderID:         senderID,
-				IMDisplayName:    msg.IMDisplayName,
-				TokenDisplayName: msg.FromDisplayNameInToken,
-				Timestamp:        ts,
-				Body:             content.Body,
-				FormattedBody:    content.FormattedBody,
-				GIFs:             content.GIFs,
-				InlineImages:     content.InlineImages,
-				PropertiesFiles:  model.ExtractFilesProperty(msg.Properties),
-				PropertiesRaw:    msg.Properties,
-				Reactions:        model.ExtractReactions(msg.Properties),
-				MessageType:      strings.TrimSpace(msg.MessageType),
-				SkypeEditedID:    strings.TrimSpace(msg.SkypeEditedID),
-				ReplyToID:        model.ExtractReplyToID(msg.Content),
-				ThreadRootID:     model.ExtractThreadRootID(msg.Properties),
-				Mentions:         mentions,
-			})
+			result = append(result, converted)
 			pageBatch++
 		}
 
