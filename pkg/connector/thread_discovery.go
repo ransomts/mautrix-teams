@@ -84,8 +84,13 @@ func (c *TeamsClient) refreshThreads(ctx context.Context) error {
 		// Discovery runs every 30s; only re-announce a chat whose name, topic
 		// or membership changed (or that we have not announced since startup),
 		// otherwise every pass floods each portal's event queue.
-		if !c.chatInfoChanged(thread.ID, chatInfoSignature(chatInfo)) {
+		sig := chatInfoSignature(chatInfo)
+		prevSig, changed := c.chatInfoChangedWithPrev(thread.ID, sig)
+		if !changed {
 			continue
+		}
+		if prevSig != "" {
+			log.Debug().Str("thread_id", thread.ID).Str("previous", prevSig).Str("current", sig).Msg("Chat info changed; announcing")
 		}
 		c.queueRemoteEvent(&simplevent.ChatResync{
 			EventMeta: simplevent.EventMeta{
@@ -133,6 +138,13 @@ func chatInfoSignature(info *bridgev2.ChatInfo) string {
 // chatInfoChanged records sig for threadID and reports whether it differs
 // from the last recorded one; the first sighting counts as a change.
 func (c *TeamsClient) chatInfoChanged(threadID string, sig string) bool {
+	_, changed := c.chatInfoChangedWithPrev(threadID, sig)
+	return changed
+}
+
+// chatInfoChangedWithPrev is chatInfoChanged that also returns the previous
+// signature (empty when unknown), for diagnostics.
+func (c *TeamsClient) chatInfoChangedWithPrev(threadID string, sig string) (string, bool) {
 	c.chatInfoMu.Lock()
 	defer c.chatInfoMu.Unlock()
 	if c.chatInfoSigs == nil {
@@ -140,7 +152,7 @@ func (c *TeamsClient) chatInfoChanged(threadID string, sig string) bool {
 	}
 	prev, known := c.chatInfoSigs[threadID]
 	c.chatInfoSigs[threadID] = sig
-	return !known || prev != sig
+	return prev, !known || prev != sig
 }
 
 // resolveDMNameFromThreadID extracts the other participant's display name
