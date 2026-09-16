@@ -46,7 +46,7 @@ func collectGIFs(node *nethtml.Node, gifs *[]TeamsGIF, seenURLs map[string]struc
 				appendGIFsFromImages(node, title, gifs, seenURLs)
 			}
 		case "img":
-			if hasGiphyItemType(node) {
+			if isGIFImage(node) {
 				appendSingleGIF(node, "", gifs, seenURLs)
 			}
 		}
@@ -88,6 +88,41 @@ func appendSingleGIF(node *nethtml.Node, fallbackTitle string, gifs *[]TeamsGIF,
 func hasGiphyItemType(node *nethtml.Node) bool {
 	itemType := strings.ToLower(strings.TrimSpace(getAttr(node, "itemtype")))
 	return strings.Contains(itemType, "schema.skype.com/giphy")
+}
+
+// gifCDNHosts are the hosts Teams' GIF picker links to.  The picker's newer
+// markup is a bare <img> with no Giphy itemtype, so the host is what tells a
+// GIF apart from a pasted image that needs the AMS download path.
+var gifCDNHosts = []string{"giphy.com", "tenor.com", "tenor.co", "gfycat.com"}
+
+// isGIFImage reports whether an <img> is a Teams GIF-picker GIF, by its
+// Giphy itemtype, its CDN host or the "(GIF Image)" alt text Teams adds.
+func isGIFImage(node *nethtml.Node) bool {
+	if node == nil || node.Type != nethtml.ElementNode || !strings.EqualFold(node.Data, "img") {
+		return false
+	}
+	if hasGiphyItemType(node) {
+		return true
+	}
+	if IsGIFCDNURL(getAttr(node, "src")) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(getAttr(node, "alt")), "(gif image)")
+}
+
+// IsGIFCDNURL reports whether rawURL points at one of the GIF CDNs.
+func IsGIFCDNURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	for _, cdn := range gifCDNHosts {
+		if host == cdn || strings.HasSuffix(host, "."+cdn) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasEmojiItemType(node *nethtml.Node) bool {

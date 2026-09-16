@@ -41,3 +41,32 @@ func TestNormalizeMessageBodyUnsupportedTagFallsBackToPlain(t *testing.T) {
 		t.Fatalf("expected empty formatted body, got %q", content.FormattedBody)
 	}
 }
+
+// A message that is only a Teams emoticon is an <img> with the emoji in its
+// alt attribute and no text node; it must not come out empty.
+func TestNormalizeMessageBodyEmoticonImage(t *testing.T) {
+	raw := `<p><span title="Shrimp" type="(1f990_shrimp)" class="animated-emoticon-20-1f990_shrimp" itemscope=""><img itemscope="" itemtype="http://schema.skype.com/Emoji" itemid="1f990_shrimp" src="https://statics.teams.cdn.office.net/x/20_f.png" title="Shrimp" alt="🦐" style="width:20px; height:20px"></span></p>`
+	content := NormalizeMessageBody(raw)
+	if content.Body != "🦐" {
+		t.Fatalf("unexpected body: %q", content.Body)
+	}
+	if content.FormattedBody != "<p>🦐</p>" {
+		t.Fatalf("unexpected formatted body: %q", content.FormattedBody)
+	}
+}
+
+func TestNormalizeMessageBodyEmoticonInText(t *testing.T) {
+	raw := `<div>great <span class="animated-emoticon-58-speechless" title="Speechless"><img itemtype="http://schema.skype.com/Emoji" itemid="speechless" src="https://x/100_f.png" alt="😶"></span> ok</div>`
+	content := NormalizeMessageBody(raw)
+	if content.Body != "great 😶 ok" {
+		t.Fatalf("unexpected body: %q", content.Body)
+	}
+}
+
+func TestNormalizeMessageBodyEmoticonWithoutAlt(t *testing.T) {
+	raw := `<p><img itemtype="http://schema.skype.com/Emoji" itemid="1f47a_japanesegoblin" src="https://x/20_f.png" title="Goblin"></p>`
+	content := NormalizeMessageBody(raw)
+	if content.Body != ":goblin:" {
+		t.Fatalf("unexpected body: %q", content.Body)
+	}
+}

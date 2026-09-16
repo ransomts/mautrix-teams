@@ -44,7 +44,7 @@ func collectInlineImages(node *nethtml.Node, images *[]TeamsInlineImage, seen ma
 		if tag == "readonly" && hasGiphyItemType(node) {
 			return
 		}
-		if tag == "img" && !hasGiphyItemType(node) && !hasEmojiItemType(node) {
+		if tag == "img" && !isGIFImage(node) && !hasEmojiItemType(node) {
 			src := strings.TrimSpace(getAttr(node, "src"))
 			if src != "" && isSafeHTTPURL(src) {
 				if _, exists := seen[src]; !exists {

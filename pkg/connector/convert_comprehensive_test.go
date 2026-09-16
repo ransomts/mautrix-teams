@@ -52,14 +52,14 @@ func TestConvertTeamsMessage(t *testing.T) {
 			wantParts:        1,
 		},
 		{
-			name: "empty body produces space fallback",
+			name: "empty body produces a visible placeholder notice",
 			msg: model.RemoteMessage{
 				Body:        "",
 				MessageType: "RichText/Html",
 				SenderID:    "8:orgid:alice",
 			},
-			wantMsgType:      event.MsgText,
-			wantBodyContains: " ",
+			wantMsgType:      event.MsgNotice,
+			wantBodyContains: "[Unsupported Teams message: RichText/Html]",
 			wantParts:        1,
 		},
 		{

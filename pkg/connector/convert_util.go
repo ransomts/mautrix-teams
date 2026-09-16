@@ -325,12 +325,45 @@ func cloneExtra(extra map[string]any) map[string]any {
 	return out
 }
 
+// isAMSURL reports whether imageURL is served by Teams' media store (AMS),
+// which needs the skypetoken and the region rewrite.  Anything else in a
+// message body (a GIF CDN, an external image) is public and must be fetched
+// without the token.
+func isAMSURL(imageURL string, regionAmsBase string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(imageURL))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return false
+	}
+	if regionParsed, err := url.Parse(regionAmsBase); err == nil && regionParsed.Hostname() != "" &&
+		strings.EqualFold(host, regionParsed.Hostname()) {
+		return true
+	}
+	return strings.HasSuffix(host, ".asm.skype.com") ||
+		strings.HasSuffix(host, ".asyncgw.teams.microsoft.com") ||
+		(strings.HasSuffix(host, ".teams.microsoft.com") && strings.Contains(parsed.Path, "/objects/"))
+}
+
+// downloadPublicImage fetches an image that needs no Teams credential.
+func downloadPublicImage(ctx context.Context, httpClient *http.Client, imageURL string) ([]byte, string, error) {
+	return downloadImage(ctx, httpClient, imageURL, "")
+}
+
 func downloadAMSImage(ctx context.Context, httpClient *http.Client, imageURL string, skypeToken string) ([]byte, string, error) {
+	return downloadImage(ctx, httpClient, imageURL, "skype_token "+skypeToken)
+}
+
+func downloadImage(ctx context.Context, httpClient *http.Client, imageURL string, authorization string) ([]byte, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("Authorization", "skype_token "+skypeToken)
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {

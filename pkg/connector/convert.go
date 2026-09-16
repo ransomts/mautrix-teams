@@ -53,11 +53,13 @@ func (c *TeamsClient) convertTeamsMessage(ctx context.Context, portal *bridgev2.
 		}
 	}
 	hasInlineImages := len(msg.InlineImages) > 0
-	if (!hasDriveItemID && !hasInlineImages) || intent == nil || c == nil {
+	hasGIFs := len(msg.GIFs) > 0
+	if (!hasDriveItemID && !hasInlineImages && !hasGIFs) || intent == nil || c == nil {
 		log.Debug().
 			Str("message_id", msg.MessageID).
 			Bool("has_drive_item", hasDriveItemID).
 			Bool("has_inline_images", hasInlineImages).
+			Bool("has_gifs", hasGIFs).
 			Bool("intent_nil", intent == nil).
 			Msg("Using legacy conversion path")
 		return c.convertTeamsMessageLegacy(msg), nil
@@ -70,34 +72,37 @@ func (c *TeamsClient) convertTeamsMessage(ctx context.Context, portal *bridgev2.
 		roomID = portal.MXID
 	}
 	mediaParts, fallback := c.reuploadInboundAttachments(ctx, roomID, intent, attachments, extra)
-	parts := make([]*bridgev2.ConvertedMessagePart, 0, len(mediaParts)+len(msg.InlineImages)+1)
+	parts := make([]*bridgev2.ConvertedMessagePart, 0, len(mediaParts)+len(msg.InlineImages)+len(msg.GIFs)+1)
 	parts = append(parts, mediaParts...)
 
 	// Re-upload inline images (pasted images in Teams HTML body).
 	inlineParts := c.reuploadInlineImages(ctx, roomID, intent, msg.InlineImages, extra)
 	parts = append(parts, inlineParts...)
 
+	// GIF-picker GIFs are public CDN files: show them as images, and as
+	// links only when the download fails.
+	gifParts, gifFallback := c.reuploadGIFs(ctx, roomID, intent, msg.GIFs, extra)
+	parts = append(parts, gifParts...)
+
 	// Caption: always preserve Teams message body (and include any GIFs and fallback attachment lines)
 	// as a separate m.text message after all attachment parts.
-	captionRendered := renderInboundMessageWithGIFs(msg.Body, msg.FormattedBody, fallback, msg.GIFs)
+	captionRendered := renderInboundMessageWithGIFs(msg.Body, msg.FormattedBody, fallback, gifFallback)
 	if captionPart := buildCaptionPart(networkid.PartID("caption"), captionRendered, extra); captionPart != nil {
 		parts = append(parts, captionPart)
 	}
 
 	if len(parts) == 0 {
-		// Hard guarantee: never drop the message entirely.
+		// Hard guarantee: never drop the message entirely, and say what it
+		// was rather than leaving a blank line.
 		log.Warn().
 			Str("message_id", msg.MessageID).
 			Str("message_type", msg.MessageType).
 			Int("attachments", len(attachments)).
 			Int("inline_images", len(msg.InlineImages)).
-			Msg("Conversion produced zero parts, sending space fallback")
+			Int("gifs", len(msg.GIFs)).
+			Msg("Conversion produced zero parts, sending placeholder")
 		return &bridgev2.ConvertedMessage{
-			Parts: []*bridgev2.ConvertedMessagePart{{
-				Type:    event.EventMessage,
-				Content: &event.MessageEventContent{MsgType: event.MsgText, Body: " "},
-				Extra:   extra,
-			}},
+			Parts: []*bridgev2.ConvertedMessagePart{unsupportedMessagePart(msg, extra)},
 		}, nil
 	}
 
@@ -209,8 +214,14 @@ func (c *TeamsClient) convertTeamsMessageLegacy(msg model.RemoteMessage) *bridge
 			}
 		}
 	}
+	extra := perMessageExtraWithRendered(msg, rendered)
 	if body == "" && strings.TrimSpace(rendered.FormattedBody) == "" {
-		body = " "
+		log := c.log()
+		log.Warn().
+			Str("message_id", msg.MessageID).
+			Str("message_type", msg.MessageType).
+			Msg("Message has no renderable content, sending placeholder")
+		return &bridgev2.ConvertedMessage{Parts: []*bridgev2.ConvertedMessagePart{unsupportedMessagePart(msg, extra)}}
 	}
 	content := &event.MessageEventContent{
 		MsgType: event.MsgText,
@@ -219,7 +230,7 @@ func (c *TeamsClient) convertTeamsMessageLegacy(msg model.RemoteMessage) *bridge
 	if formatted := strings.TrimSpace(rendered.FormattedBody); formatted != "" {
 		content.Format = event.FormatHTML
 		content.FormattedBody = formatted
-		if content.Body == " " {
+		if content.Body == "" {
 			// Provide a slightly better fallback for clients that don't support HTML.
 			content.Body = stripHTMLFallback(formatted)
 			if strings.TrimSpace(content.Body) == "" {
@@ -227,8 +238,6 @@ func (c *TeamsClient) convertTeamsMessageLegacy(msg model.RemoteMessage) *bridge
 			}
 		}
 	}
-
-	extra := perMessageExtraWithRendered(msg, rendered)
 
 	parts := []*bridgev2.ConvertedMessagePart{{
 		Type:    event.EventMessage,
@@ -389,13 +398,23 @@ func (c *TeamsClient) reuploadInlineImages(
 	var parts []*bridgev2.ConvertedMessagePart
 	for i, img := range images {
 		imageURL := img.URL
-		if regionAmsURL != "" {
-			imageURL = rewriteAMSURL(imageURL, regionAmsURL)
+		var data []byte
+		var contentType string
+		var err error
+		if isAMSURL(imageURL, regionAmsURL) {
+			// Only AMS gets the region rewrite and the skypetoken; any other
+			// host is a public image and must not see the token.
+			if regionAmsURL != "" {
+				imageURL = rewriteAMSURL(imageURL, regionAmsURL)
+			}
+			log.Debug().Str("url", imageURL).Msg("Downloading inline image from AMS")
+			data, contentType, err = downloadAMSImage(ctx, httpClient, imageURL, skypeToken)
+		} else {
+			log.Debug().Str("url", imageURL).Msg("Downloading inline image")
+			data, contentType, err = downloadPublicImage(ctx, httpClient, imageURL)
 		}
-		log.Debug().Str("url", imageURL).Msg("Downloading inline image from AMS")
-		data, contentType, err := downloadAMSImage(ctx, httpClient, imageURL, skypeToken)
 		if err != nil {
-			log.Err(err).Str("url", img.URL).Msg("Failed to download inline image from AMS")
+			log.Err(err).Str("url", img.URL).Msg("Failed to download inline image")
 			continue
 		}
 		if len(data) == 0 {
@@ -425,6 +444,74 @@ func (c *TeamsClient) reuploadInlineImages(
 		parts = append(parts, part)
 	}
 	return parts
+}
+
+// reuploadGIFs downloads GIF-picker GIFs (public CDN files, fetched without
+// any Teams credential) and uploads them as images.  GIFs that cannot be
+// fetched are returned so the caption can link them instead.
+func (c *TeamsClient) reuploadGIFs(
+	ctx context.Context,
+	roomID id.RoomID,
+	intent bridgev2.MatrixAPI,
+	gifs []model.TeamsGIF,
+	extra map[string]any,
+) (parts []*bridgev2.ConvertedMessagePart, fallback []model.TeamsGIF) {
+	if len(gifs) == 0 || c == nil {
+		return nil, nil
+	}
+	httpClient := c.getConsumerHTTP()
+	if httpClient == nil || intent == nil {
+		return nil, gifs
+	}
+	log := c.log()
+	for i, gif := range gifs {
+		data, contentType, err := downloadPublicImage(ctx, httpClient, gif.URL)
+		if err != nil || len(data) == 0 {
+			log.Warn().Err(err).Str("url", gif.URL).Msg("Failed to download GIF, linking it instead")
+			fallback = append(fallback, gif)
+			continue
+		}
+		mimeType := detectMIMEType("", contentType, data)
+		filename := fmt.Sprintf("gif_%d", i)
+		if ext := mimeExtension(mimeType); ext != "" {
+			filename += ext
+		}
+		mxc, file, err := intent.UploadMedia(ctx, roomID, data, filename, mimeType)
+		if err != nil {
+			log.Warn().Err(err).Str("url", gif.URL).Msg("Failed to upload GIF, linking it instead")
+			fallback = append(fallback, gif)
+			continue
+		}
+		content := buildMediaContent(event.MsgImage, filename, mimeType, len(data), mxc, file)
+		if title := strings.TrimSpace(gif.Title); title != "" && title != "GIF" {
+			content.Body = title
+		}
+		parts = append(parts, &bridgev2.ConvertedMessagePart{
+			ID:      networkid.PartID(fmt.Sprintf("gif_%d", i)),
+			Type:    event.EventMessage,
+			Extra:   cloneExtra(extra),
+			Content: content,
+		})
+	}
+	return parts, fallback
+}
+
+// unsupportedMessagePart is what a Teams message the converter could get
+// nothing out of becomes: a notice naming the message type, so the gap is
+// visible and diagnosable rather than a blank line.
+func unsupportedMessagePart(msg model.RemoteMessage, extra map[string]any) *bridgev2.ConvertedMessagePart {
+	msgType := strings.TrimSpace(msg.MessageType)
+	if msgType == "" {
+		msgType = "unknown type"
+	}
+	return &bridgev2.ConvertedMessagePart{
+		Type: event.EventMessage,
+		Content: &event.MessageEventContent{
+			MsgType: event.MsgNotice,
+			Body:    fmt.Sprintf("[Unsupported Teams message: %s]", msgType),
+		},
+		Extra: extra,
+	}
 }
 
 var matrixMentionPillRe = regexp.MustCompile(`<a\s+href="https://matrix\.to/#/([@!][^"]+)">([^<]+)</a>`)

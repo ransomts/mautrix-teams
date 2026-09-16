@@ -112,6 +112,28 @@ func normalizeHTMLFragment(value string) (body string, formatted string, ok bool
 	return plain, sanitized, true
 }
 
+// emoticonText returns the text standing in for a Teams emoticon image: the
+// Unicode emoji Teams puts in its alt attribute, else the title as a
+// shortcode.  Teams sends its emoticon picker's emoji as
+// <span class="animated-emoticon-…"><img itemtype="http://schema.skype.com/Emoji"
+// itemid="1f990_shrimp" alt="🦐" title="Shrimp"></span>, an image with no
+// text node, so without this a message that is only an emoticon is empty.
+func emoticonText(node *nethtml.Node) (string, bool) {
+	if node == nil || node.Type != nethtml.ElementNode || !strings.EqualFold(node.Data, "img") || !hasEmojiItemType(node) {
+		return "", false
+	}
+	if alt := strings.TrimSpace(getAttr(node, "alt")); alt != "" {
+		return alt, true
+	}
+	if title := strings.TrimSpace(getAttr(node, "title")); title != "" {
+		return ":" + strings.ToLower(strings.ReplaceAll(title, " ", "_")) + ":", true
+	}
+	if itemID := strings.TrimSpace(getAttr(node, "itemid")); itemID != "" {
+		return ":" + itemID + ":", true
+	}
+	return "", false
+}
+
 func renderPlainNode(builder *strings.Builder, node *nethtml.Node) {
 	switch node.Type {
 	case nethtml.TextNode:
@@ -119,6 +141,10 @@ func renderPlainNode(builder *strings.Builder, node *nethtml.Node) {
 	case nethtml.ElementNode:
 		tag := strings.ToLower(node.Data)
 		if isUnsafeTag(tag) {
+			return
+		}
+		if text, ok := emoticonText(node); ok {
+			builder.WriteString(text)
 			return
 		}
 		if tag == "br" {
@@ -149,6 +175,10 @@ func renderFormattedNode(builder *strings.Builder, node *nethtml.Node) bool {
 	case nethtml.ElementNode:
 		tag := strings.ToLower(node.Data)
 		if isUnsafeTag(tag) {
+			return false
+		}
+		if text, ok := emoticonText(node); ok {
+			builder.WriteString(html.EscapeString(text))
 			return false
 		}
 		if tag == "br" {
