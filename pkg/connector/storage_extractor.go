@@ -42,6 +42,13 @@ const graphFilesReadWriteScope = "https://graph.microsoft.com/Files.ReadWrite"
 const graphTeamReadScope = "https://graph.microsoft.com/Team.ReadBasic.All"
 const graphChannelReadScope = "https://graph.microsoft.com/Channel.ReadBasic.All"
 
+// skypeSpacesRefreshScope is the delegated scope whose access token the
+// enterprise skypetoken endpoint accepts. When a login carries this as its
+// RefreshScope, ensureValidSkypeToken refreshes with it against the tenant
+// token endpoint instead of the Microsoft-account MBI scope on /common
+// (which enterprise tenants reject with AADSTS500015).
+const skypeSpacesRefreshScope = "https://api.spaces.skype.com/.default openid profile offline_access"
+
 // graphDefaultScope asks for whatever Graph permissions are preauthorized for
 // the client. First-party clients such as the Teams web app reject requests
 // for specific Graph scopes with AADSTS65002 but accept .default.
@@ -109,7 +116,7 @@ func ExtractTeamsLoginMetadataFromLocalStorage(ctx context.Context, rawStorage s
 		return nil, bridgev2.RespError{ErrCode: "FI.MAU.TEAMS_MISSING_USER_ID", Err: "Teams user ID missing from skypetoken response", StatusCode: http.StatusBadRequest}
 	}
 
-	return &teamsid.UserLoginMetadata{
+	meta := &teamsid.UserLoginMetadata{
 		RefreshToken:         state.RefreshToken,
 		AccessTokenExpiresAt: state.ExpiresAtUnix,
 		SkypeToken:           skResult.Token,
@@ -119,7 +126,35 @@ func ExtractTeamsLoginMetadataFromLocalStorage(ctx context.Context, rawStorage s
 		TeamsUserID:          teamsUserID,
 		RegionChatServiceURL: skResult.ChatServiceURL,
 		RegionAmsURL:         skResult.AmsURL,
-	}, nil
+	}
+	// For an enterprise tenant (a tenant-specific token endpoint is
+	// configured), have the bridge refresh the skypetoken with the delegated
+	// Spaces scope against that endpoint, the same grant the browser uses.
+	// The legacy MBI/`common` path only works for consumer accounts.
+	if ep := strings.TrimSpace(tenantTokenEndpoint(main)); ep != "" {
+		meta.RefreshScope = skypeSpacesRefreshScope
+		meta.ClientID = resolveClientID(main)
+		meta.TokenEndpoint = ep
+		meta.LoginMethod = "browser_refresh"
+	}
+	return meta, nil
+}
+
+// tenantTokenEndpoint returns the configured token endpoint when it is
+// tenant-specific (not empty and not the consumer/common endpoint).
+func tenantTokenEndpoint(main *TeamsConnector) string {
+	if main == nil {
+		return ""
+	}
+	ep := strings.TrimSpace(main.Config.TokenEndpoint)
+	if ep == "" {
+		return ""
+	}
+	low := strings.ToLower(ep)
+	if strings.Contains(low, "/common/") || strings.Contains(low, "/consumers/") {
+		return ""
+	}
+	return ep
 }
 
 func refreshAccessTokenForSkypeScope(ctx context.Context, client *auth.Client, refreshToken string) (*auth.AuthState, error) {
