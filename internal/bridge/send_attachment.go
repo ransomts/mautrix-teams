@@ -20,7 +20,7 @@ const MaxAttachmentBytesV0 = 100 * 1024 * 1024
 
 type GraphAPI interface {
 	UploadTeamsChatFile(ctx context.Context, filename string, content []byte) (*graph.UploadedDriveItem, error)
-	CreateShareLink(ctx context.Context, listItemUniqueID string) (*graph.CreatedShareLink, error)
+	CreateShareLink(ctx context.Context, driveItemID string) (*graph.CreatedShareLink, error)
 }
 
 type TeamsSendAPI interface {
@@ -98,7 +98,10 @@ func (o *AttachmentOrchestrator) SendAttachmentMessage(ctx context.Context, thre
 		Str("listItemUniqueID", strings.TrimSpace(uploaded.ListItemUniqueID)).
 		Msg("upload_success")
 
-	share, err := o.Graph.CreateShareLink(ctx, uploaded.ListItemUniqueID)
+	// Share link must target the uploaded drive item by its driveItem id in
+	// the user's OneDrive; the SharePoint listItemUniqueId is a different id
+	// and 404s against /me/drive/items.
+	share, err := o.Graph.CreateShareLink(ctx, uploaded.DriveItemID)
 	if err != nil {
 		log.Err(err).Str("phase", "create_link").Msg("send_attachment failed")
 		return "", err

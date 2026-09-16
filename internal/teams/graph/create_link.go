@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -38,21 +39,24 @@ type GraphCreateLinkError struct {
 }
 
 func (e GraphCreateLinkError) Error() string {
-	return "graph createLink request failed"
+	if e.BodySnippet != "" {
+		return fmt.Sprintf("graph createLink request failed with status %d: %s", e.Status, e.BodySnippet)
+	}
+	return fmt.Sprintf("graph createLink request failed with status %d", e.Status)
 }
 
-func (c *GraphClient) CreateShareLink(ctx context.Context, listItemUniqueID string) (*CreatedShareLink, error) {
+func (c *GraphClient) CreateShareLink(ctx context.Context, driveItemID string) (*CreatedShareLink, error) {
 	if c == nil || c.HTTP == nil {
 		return nil, ErrMissingGraphHTTPClient
 	}
 	if strings.TrimSpace(c.AccessToken) == "" {
 		return nil, ErrMissingGraphAccessToken
 	}
-	if strings.TrimSpace(listItemUniqueID) == "" {
+	if strings.TrimSpace(driveItemID) == "" {
 		return nil, ErrEmptyListItemUniqueID
 	}
 
-	endpoint := strings.TrimRight(defaultCreateLinkEndpoint, "/") + "/drive/items/" + listItemUniqueID + "/createLink"
+	endpoint := strings.TrimRight(defaultCreateLinkEndpoint, "/") + "/me/drive/items/" + driveItemID + "/createLink"
 	bodyBytes, err := json.Marshal(struct {
 		Type string `json:"type"`
 	}{

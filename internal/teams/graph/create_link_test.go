@@ -25,7 +25,7 @@ func TestCreateShareLinkSuccess(t *testing.T) {
 			if r.Method != http.MethodPost {
 				t.Fatalf("unexpected method: %s", r.Method)
 			}
-			if r.URL.String() != "https://graph.microsoft.com/v1.0/drive/items/"+uniqueID+"/createLink" {
+			if r.URL.String() != "https://graph.microsoft.com/v1.0/me/drive/items/"+uniqueID+"/createLink" {
 				t.Fatalf("unexpected url: %s", r.URL.String())
 			}
 			if r.Header.Get("Authorization") != "Bearer "+token {
