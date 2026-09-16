@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -39,6 +40,9 @@ func (c *TeamsClient) pollPresence(ctx context.Context) {
 	if c == nil || c.Meta == nil || c.Login == nil || c.Main == nil || c.Main.Bridge == nil {
 		return
 	}
+	if c.presenceForbidden.Load() {
+		return
+	}
 	log := zerolog.Ctx(ctx)
 
 	if err := c.ensureValidGraphToken(ctx); err != nil {
@@ -49,6 +53,10 @@ func (c *TeamsClient) pollPresence(ctx context.Context) {
 	if err != nil || graphToken == "" {
 		return
 	}
+
+	// Seed from users we have already seen: enterprise conversations carry no
+	// member list, so knownUsers would otherwise stay empty.
+	c.seedKnownUsersFromProfiles(ctx)
 
 	// Collect known user IDs.
 	c.knownUsersMu.Lock()
@@ -80,6 +88,12 @@ func (c *TeamsClient) pollPresence(ctx context.Context) {
 
 		presenceMap, err := gc.GetBatchPresence(ctx, batch)
 		if err != nil {
+			if errors.Is(err, graph.ErrPresenceForbidden) {
+				if c.presenceForbidden.CompareAndSwap(false, true) {
+					log.Info().Msg("Presence polling disabled: tenant has not consented Presence.Read.All for this client")
+				}
+				return
+			}
 			log.Debug().Err(err).Msg("Presence batch request failed")
 			continue
 		}
@@ -113,6 +127,22 @@ func (c *TeamsClient) pollPresence(ctx context.Context) {
 			}
 		}
 		c.presenceMu.Unlock()
+	}
+}
+
+// seedKnownUsersFromProfiles loads every profile's Teams user ID into the
+// known-user set. Cheap and idempotent (trackKnownUser dedupes).
+func (c *TeamsClient) seedKnownUsersFromProfiles(ctx context.Context) {
+	if c == nil || c.Main == nil || c.Main.DB == nil {
+		return
+	}
+	ids, err := c.Main.DB.Profile.ListTeamsUserIDs(ctx)
+	if err != nil {
+		zerolog.Ctx(ctx).Debug().Err(err).Msg("Failed to seed known users from profiles")
+		return
+	}
+	for _, id := range ids {
+		c.trackKnownUser(id)
 	}
 }
 

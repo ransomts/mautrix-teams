@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+var ErrPresenceForbidden = fmt.Errorf("graph presence forbidden (Presence.Read.All not consented)")
+
 // UserPresence represents a user's presence status from the Graph API.
 type UserPresence struct {
 	Availability string `json:"availability"` // Available, Busy, DoNotDisturb, Away, Offline, etc.
@@ -155,6 +157,9 @@ func (c *GraphClient) GetBatchPresence(ctx context.Context, userIDs []string) (m
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusForbidden {
+		return nil, ErrPresenceForbidden
+	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxUploadErrorBytes))
 		return nil, fmt.Errorf("graph batch presence request failed with status %d: %s", resp.StatusCode, string(snippet))

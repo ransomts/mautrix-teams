@@ -228,6 +228,7 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 			displayName = senderID
 		}
 		_ = c.Main.DB.Profile.Upsert(ctx, senderID, displayName, now)
+		c.trackKnownUser(senderID)
 		msg.SenderName = displayName
 
 		es := bridgev2.EventSender{Sender: teamsUserIDToNetworkUserID(senderID)}

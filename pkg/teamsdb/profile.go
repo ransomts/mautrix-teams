@@ -58,6 +58,31 @@ func (pq *ProfileQuery) Upsert(ctx context.Context, teamsUserID, displayName str
 	return err
 }
 
+// ListTeamsUserIDs returns every known Teams user ID for this bridge, so
+// presence polling can seed itself from users we have already seen (enterprise
+// conversations do not carry member lists).
+func (pq *ProfileQuery) ListTeamsUserIDs(ctx context.Context) ([]string, error) {
+	if pq == nil || pq.Database == nil {
+		return nil, errMissingDB
+	}
+	rows, err := pq.Database.Query(ctx, `SELECT teams_user_id FROM teams_profile WHERE bridge_id=$1`, pq.BridgeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(id) != "" {
+			out = append(out, id)
+		}
+	}
+	return out, rows.Err()
+}
+
 func (pq *ProfileQuery) scan(row dbutil.Scannable) (*Profile, error) {
 	if row == nil {
 		return nil, nil

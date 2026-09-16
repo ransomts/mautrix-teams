@@ -67,8 +67,9 @@ type TeamsClient struct {
 	selfMessageMu sync.Mutex
 	selfMessages  map[string]time.Time
 
-	presenceMu    sync.Mutex
-	presenceCache map[string]string // userID -> last known availability
+	presenceMu        sync.Mutex
+	presenceCache     map[string]string // userID -> last known availability
+	presenceForbidden atomic.Bool       // set when the tenant denies presence (403)
 
 	knownUsersMu sync.Mutex
 	knownUsers   map[string]struct{}
