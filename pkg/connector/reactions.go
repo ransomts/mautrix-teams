@@ -1,10 +1,71 @@
 package connector
 
 import (
+	"strconv"
 	"strings"
 
 	"go.mau.fi/util/variationselector"
 )
+
+// emotionKeyAliases maps inbound-only Teams reaction keys (ones whose emoji
+// already maps to a different key in emojiToEmotionKey, or that Teams names
+// without a codepoint prefix) to emoji.
+var emotionKeyAliases = map[string]string{
+	"yes":                 "👍",
+	"no":                  "👎",
+	"smileeyes":           "😊",
+	"handsinair":          "🙌",
+	"clappinghands":       "👏",
+	"snake":               "🐍",
+	"smilingfacewithtear": "🥲",
+	"pinchedfingers":      "🤌",
+	"eyes":                "👀",
+	"heavycheckmark":      "✔️",
+	"hundredpointssymbol": "💯",
+	"laughcry":            "😂",
+}
+
+var skinToneSuffixes = map[string]string{
+	"tone1": "\U0001F3FB",
+	"tone2": "\U0001F3FC",
+	"tone3": "\U0001F3FD",
+	"tone4": "\U0001F3FE",
+	"tone5": "\U0001F3FF",
+}
+
+// splitSkinTone separates a "-toneN" suffix from a Teams reaction key.
+func splitSkinTone(key string) (string, string) {
+	if idx := strings.LastIndex(key, "-tone"); idx > 0 {
+		if tone, ok := skinToneSuffixes[key[idx+1:]]; ok {
+			return key[:idx], tone
+		}
+	}
+	return key, ""
+}
+
+// emojiFromCodepointKey decodes Teams' codepoint-prefixed reaction keys such
+// as "2757_heavyexclamationmarksymbol" or "1f468_200d_1f4bb_mantechnologist":
+// the leading underscore-separated hex tokens are the emoji's codepoints and
+// the trailing token is its name.
+func emojiFromCodepointKey(key string) (string, bool) {
+	parts := strings.Split(key, "_")
+	var runes []rune
+	for _, part := range parts {
+		if len(part) < 2 || len(part) > 6 {
+			break
+		}
+		value, err := strconv.ParseUint(part, 16, 32)
+		if err != nil || value < 0x20 || value > 0x10FFFF {
+			break
+		}
+		runes = append(runes, rune(value))
+	}
+	// Require a trailing name so hex-looking words ("beef") are not decoded.
+	if len(runes) == 0 || len(runes) == len(parts) {
+		return "", false
+	}
+	return variationselector.FullyQualify(string(runes)), true
+}
 
 var emojiToEmotionKey = map[string]string{
 	variationselector.FullyQualify("👍🏻"): "like",
@@ -144,9 +205,15 @@ func MapEmotionKeyToEmoji(emotionKey string) (string, bool) {
 	if emotionKey == "" {
 		return "", false
 	}
-	emoji, ok := emotionKeyToEmoji[emotionKey]
-	if ok {
-		return emoji, true
+	base, tone := splitSkinTone(emotionKey)
+	if emoji, ok := emotionKeyToEmoji[base]; ok {
+		return emoji + tone, true
+	}
+	if emoji, ok := emotionKeyAliases[base]; ok {
+		return variationselector.FullyQualify(emoji) + tone, true
+	}
+	if emoji, ok := emojiFromCodepointKey(base); ok {
+		return emoji + tone, true
 	}
 	// Passthrough: if the emotion key looks like a Unicode emoji, use it as-is.
 	if IsUnicodeEmoji(emotionKey) {
