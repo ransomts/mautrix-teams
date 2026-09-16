@@ -3,6 +3,7 @@ package teamsdb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
@@ -64,7 +65,9 @@ func (pq *ProfileQuery) scan(row dbutil.Scannable) (*Profile, error) {
 	var teamsUserID, displayName sql.NullString
 	var lastSeenMS sql.NullInt64
 	err := row.Scan(&teamsUserID, &displayName, &lastSeenMS)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	} else if err != nil {
 		return nil, err
 	}
 	p := &Profile{
