@@ -11,7 +11,6 @@ import (
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/bridgev2/simplevent"
-	"maunium.net/go/mautrix/bridgev2/status"
 
 	"go.mau.fi/mautrix-teams/internal/teams/model"
 	"go.mau.fi/mautrix-teams/pkg/teamsdb"
@@ -72,6 +71,9 @@ func (c *TeamsClient) pollDueThreads(ctx context.Context, initialDiscoverySuccee
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if c.superseded() {
+			return errClientSuperseded
 		}
 		now := time.Now().UTC()
 		if nextDiscovery.IsZero() || !now.Before(nextDiscovery) {
@@ -137,7 +139,7 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 	}
 	log := c.log()
 	if err := c.ensureValidSkypeToken(ctx); err != nil {
-		c.Login.BridgeState.Send(status.BridgeState{StateEvent: status.StateBadCredentials, Message: err.Error(), UserAction: status.UserActionRelogin})
+		c.reportBadCredentials(err)
 		return 0, err
 	}
 	log.Trace().Str("thread_id", th.ThreadID).Str("last_seq", th.LastSequenceID).Msg("Polling thread")

@@ -64,6 +64,12 @@ func (t *TeamsConnector) LoadUserLogin(ctx context.Context, login *bridgev2.User
 		meta = &teamsid.UserLoginMetadata{}
 		login.Metadata = meta
 	}
+	if old, ok := login.Client.(*TeamsClient); ok && old != nil {
+		// A re-login reuses the UserLogin; stop the client it had, or it
+		// keeps polling with the tokens it was given (see superseded).
+		login.Log.Info().Msg("Stopping the login's previous client")
+		go old.Disconnect()
+	}
 	login.Client = &TeamsClient{
 		Main:  t,
 		Login: login,

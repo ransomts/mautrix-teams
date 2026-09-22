@@ -44,6 +44,7 @@ type TeamsClient struct {
 	tokenMu          sync.Mutex
 	skypeRefreshFail refreshFailure
 	graphRefreshFail refreshFailure
+	badCreds         badCredentials // see client_lifecycle.go
 
 	consumerHTTPMu sync.Mutex
 	consumerHTTP   *http.Client
@@ -123,11 +124,7 @@ func (c *TeamsClient) Connect(ctx context.Context) {
 	if err := c.ensureValidSkypeToken(ctx); err != nil {
 		c.loggedIn.Store(false)
 		log.Error().Err(err).Msg("Failed to ensure valid Teams tokens")
-		c.Login.BridgeState.Send(status.BridgeState{
-			StateEvent: status.StateBadCredentials,
-			Message:    err.Error(),
-			UserAction: status.UserActionRelogin,
-		})
+		c.reportBadCredentials(err)
 		return
 	}
 
@@ -639,6 +636,12 @@ func (c *TeamsClient) remoteDisplayName(ctx context.Context) string {
 // attached to a bridge (unit tests), where UserLogin.Save would dereference nil.
 func (c *TeamsClient) saveLogin(ctx context.Context) error {
 	if c == nil || c.Login == nil || c.Login.Bridge == nil {
+		return nil
+	}
+	if c.superseded() {
+		// The login's metadata is the new client's now; these tokens are old.
+		log := c.log()
+		log.Debug().Msg("Not saving login metadata from a superseded client")
 		return nil
 	}
 	return c.Login.Save(ctx)

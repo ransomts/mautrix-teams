@@ -14,7 +14,6 @@ import (
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/bridgev2/simplevent"
-	"maunium.net/go/mautrix/bridgev2/status"
 	"maunium.net/go/mautrix/event"
 
 	"go.mau.fi/mautrix-teams/internal/teams/graph"
@@ -28,7 +27,7 @@ func (c *TeamsClient) refreshThreads(ctx context.Context) error {
 	}
 	log := c.log()
 	if err := c.ensureValidSkypeToken(ctx); err != nil {
-		c.Login.BridgeState.Send(status.BridgeState{StateEvent: status.StateBadCredentials, Message: err.Error(), UserAction: status.UserActionRelogin})
+		c.reportBadCredentials(err)
 		return err
 	}
 

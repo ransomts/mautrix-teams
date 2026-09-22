@@ -13,6 +13,9 @@ func (c *TeamsClient) ensureValidGraphToken(ctx context.Context) error {
 	}
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()
+	if c.superseded() {
+		return errClientSuperseded
+	}
 	now := time.Now().UTC()
 	if c.Meta.GraphTokenValid(now) {
 		return nil

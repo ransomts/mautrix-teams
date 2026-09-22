@@ -89,19 +89,25 @@ func (c *TeamsClient) syncLoop(ctx context.Context) {
 
 	if syncMode == "longpoll" {
 		log.Info().Msg("Starting Teams long-poll sync mode")
-		if lpErr := c.longPollLoop(ctx, err == nil); lpErr != nil && !errors.Is(lpErr, context.Canceled) {
+		if lpErr := c.longPollLoop(ctx, err == nil); lpErr != nil && !loopStopped(lpErr) {
 			log.Warn().Err(lpErr).Msg("Long-poll loop failed, falling back to short-polling")
 			// Fall back to regular polling.
-			if err := c.pollDueThreads(ctx, true); err != nil && !errors.Is(err, context.Canceled) {
+			if err := c.pollDueThreads(ctx, true); err != nil && !loopStopped(err) {
 				log.Err(err).Msg("Teams polling loop exited")
 			}
 		}
 	} else {
 		// Default: short-polling with adaptive backoff.
-		if err := c.pollDueThreads(ctx, err == nil); err != nil && !errors.Is(err, context.Canceled) {
+		if err := c.pollDueThreads(ctx, err == nil); err != nil && !loopStopped(err) {
 			log.Err(err).Msg("Teams polling loop exited")
 		}
 	}
+}
+
+// loopStopped reports whether a loop ended because it was told to, not
+// because it failed.
+func loopStopped(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, errClientSuperseded)
 }
 
 // longPollLoop uses the Teams Consumer API long-polling endpoint for lower latency
@@ -129,6 +135,9 @@ func (c *TeamsClient) longPollLoop(ctx context.Context, initialDiscoverySucceede
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if c.superseded() {
+			return errClientSuperseded
 		}
 
 		// Periodic thread discovery refresh.
@@ -201,6 +210,9 @@ func (c *TeamsClient) presenceLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if c.superseded() {
+				return
+			}
 			if c.Meta != nil {
 				if graphToken, err := c.Meta.GetGraphAccessToken(); err == nil && graphToken != "" {
 					c.pollPresence(ctx)
@@ -305,6 +317,9 @@ func (c *TeamsClient) ensureValidSkypeToken(ctx context.Context) error {
 	if c.Meta == nil {
 		return errors.New("missing login metadata")
 	}
+	if c.superseded() {
+		return errClientSuperseded
+	}
 
 	now := time.Now().UTC()
 	if c.Meta.SkypeToken != "" && c.Meta.SkypeTokenExpiresAt != 0 {
@@ -365,6 +380,7 @@ func (c *TeamsClient) ensureValidSkypeToken(ctx context.Context) error {
 		return err
 	}
 	c.skypeRefreshFail.reset()
+	c.clearBadCredentials()
 
 	c.Meta.AccessTokenExpiresAt = state.ExpiresAtUnix
 	c.Meta.SkypeToken = skResult.Token
