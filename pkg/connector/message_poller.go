@@ -115,6 +115,8 @@ type pollSchedule struct {
 	nextDiscovery, lastDiscovery time.Time
 	nextActivity                 time.Time
 	activityFailures             int
+	// nextSweep is when the client's caches are next swept.
+	nextSweep time.Time
 	// throttledUntil pauses all polling after Teams answers 429.
 	throttledUntil time.Time
 	// lastSeen maps conversation ID to its newest message ID, for the
@@ -162,10 +164,24 @@ func (c *TeamsClient) pollPass(ctx context.Context, now time.Time, states map[st
 		}
 	}
 
+	if !now.Before(sched.nextSweep) {
+		if n := c.sweepCaches(now); n > 0 {
+			log.Debug().Int("removed", n).Msg("Swept expired cache entries")
+		}
+		sched.nextSweep = now.Add(cacheSweepInterval)
+	}
+
 	threads, err := c.Main.DB.ThreadState.ListForLogin(ctx, c.Login.ID)
 	if err != nil {
 		return nextWake, err
 	}
+	listed := make(map[string]struct{}, len(threads))
+	for _, th := range threads {
+		if th != nil && th.ThreadID != "" {
+			listed[th.ThreadID] = struct{}{}
+		}
+	}
+	c.forgetRemovedThreads(states, listed)
 	for _, th := range threads {
 		if th == nil || th.ThreadID == "" {
 			continue
@@ -256,6 +272,11 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 		c.reportTokenError(err)
 		return 0, err
 	}
+	// A page queued earlier may not be handled (and so not saved) yet:
+	// carry on after it rather than queue it again.
+	if pos, ok := c.cursors.pending(th.ThreadID); ok && pos.newerThan(strings.TrimSpace(th.LastSequenceID)) {
+		th.LastSequenceID, th.LastMessageTS = pos.seq, pos.ts
+	}
 	log.Trace().Str("thread_id", th.ThreadID).Str("last_seq", th.LastSequenceID).Msg("Polling thread")
 	msgs, err := c.getAPI().ListMessages(ctx, th.Conversation, th.LastSequenceID)
 	c.noteTeamsResult(err)
@@ -274,10 +295,10 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 	var maxSeq string
 	var maxTS int64
 	ingested := 0
-	selfID := ""
-	if c.Meta != nil {
-		selfID = model.NormalizeTeamsUserID(c.Meta.TeamsUserID)
-	}
+	selfID := model.NormalizeTeamsUserID(c.selfTeamsUserID())
+	// The cursor moves past this page only once bridgev2 has handled the
+	// events that advance it; see cursor_commit.go.
+	commit := newCursorCommit()
 
 	for _, msg := range msgs {
 		if strings.TrimSpace(msg.MessageID) == "" {
@@ -339,7 +360,7 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 			// Teams' own record of a membership, role or name change is
 			// worth a line; its other bookkeeping is not.
 			if evt := c.systemMessageEvent(th, msg); evt != nil {
-				c.queueRemoteEvent(evt)
+				c.queueForCursor(ctx, evt, &evt.EventMeta, commit)
 				ingested++
 				continue
 			}
@@ -357,7 +378,9 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 			displayName = strings.TrimSpace(msg.TokenDisplayName)
 		}
 		if displayName != "" {
-			_ = c.Main.DB.Profile.Upsert(ctx, senderID, displayName, now)
+			if err := c.Main.DB.Profile.Upsert(ctx, senderID, displayName, now); err != nil {
+				log.Warn().Err(err).Str("sender_id", senderID).Msg("Failed to save sender profile")
+			}
 			c.syncGhostName(ctx, senderID, displayName)
 		} else if profile, err := c.Main.DB.Profile.GetByTeamsUserID(ctx, senderID); err == nil && profile != nil && strings.TrimSpace(profile.DisplayName) != "" {
 			// A message that carries no name must not overwrite a known one.
@@ -396,7 +419,7 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 				},
 				TargetMessage: networkid.MessageID(eventMessageID),
 			}
-			c.queueRemoteEvent(deleteEvt)
+			c.queueForCursor(ctx, deleteEvt, &deleteEvt.EventMeta, commit)
 			continue
 		}
 
@@ -414,7 +437,7 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 				TargetMessage:   networkid.MessageID(strings.TrimSpace(msg.SkypeEditedID)),
 				ConvertEditFunc: c.convertTeamsEdit,
 			}
-			c.queueRemoteEvent(editEvt)
+			c.queueForCursor(ctx, editEvt, &editEvt.EventMeta, commit)
 			c.queueReactionSyncForMessage(ctx, th, msg, eventMessageID)
 			continue
 		}
@@ -433,7 +456,7 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 			TransactionID:      networkid.TransactionID(clientMessageID),
 			ConvertMessageFunc: c.convertTeamsMessage,
 		}
-		c.queueRemoteEvent(evt)
+		c.queueForCursor(ctx, evt, &evt.EventMeta, commit)
 		c.queueReactionSyncForMessage(ctx, th, msg, eventMessageID)
 		ingested++
 		// Preserve send-intent echo reconciliation for message ID mapping while
@@ -447,7 +470,10 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 	}
 
 	if maxSeq != "" {
-		_ = c.Main.DB.ThreadState.UpdateCursor(ctx, c.Login.ID, th.ThreadID, maxSeq, maxTS)
+		pos := cursorPos{seq: maxSeq, ts: maxTS}
+		threadID := th.ThreadID
+		c.cursors.noteQueued(threadID, pos)
+		commit.release(ctx, func(ctx context.Context) { c.saveCursor(ctx, threadID, pos) })
 		th.LastSequenceID = maxSeq
 		th.LastMessageTS = maxTS
 	}
@@ -492,10 +518,11 @@ func (c *TeamsClient) effectiveRemoteMessageID(msg model.RemoteMessage) string {
 
 // queueRemoteEvent sends an event through the EventSink, falling back to the
 // UserLogin when the sink has not been initialised yet.
-func (c *TeamsClient) queueRemoteEvent(evt bridgev2.RemoteEvent) {
+func (c *TeamsClient) queueRemoteEvent(evt bridgev2.RemoteEvent) bridgev2.EventHandlingResult {
 	if c.events != nil {
-		c.events.QueueRemoteEvent(evt)
+		return c.events.QueueRemoteEvent(evt)
 	} else if c.Login != nil {
-		c.Login.QueueRemoteEvent(evt)
+		return c.Login.QueueRemoteEvent(evt)
 	}
+	return bridgev2.EventHandlingResultIgnored
 }

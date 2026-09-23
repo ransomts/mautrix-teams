@@ -31,7 +31,7 @@ func (c *TeamsClient) GetContactList(ctx context.Context) ([]*bridgev2.ResolveId
 
 	selfID := ""
 	if c.Meta != nil {
-		selfID = model.NormalizeTeamsUserID(c.Meta.TeamsUserID)
+		selfID = model.NormalizeTeamsUserID(c.selfTeamsUserID())
 	}
 
 	results := make([]*bridgev2.ResolveIdentifierResponse, 0, len(users))

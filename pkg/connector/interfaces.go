@@ -40,8 +40,10 @@ type TeamsAPI interface {
 }
 
 // EventSink abstracts the bridge's remote event queue for testability.
+// The result says whether the event was only queued (Queued) or already
+// handled or refused.
 type EventSink interface {
-	QueueRemoteEvent(evt bridgev2.RemoteEvent)
+	QueueRemoteEvent(evt bridgev2.RemoteEvent) bridgev2.EventHandlingResult
 }
 
 // loginEventSink wraps a bridgev2.UserLogin as an EventSink.
@@ -49,6 +51,6 @@ type loginEventSink struct {
 	login *bridgev2.UserLogin
 }
 
-func (s *loginEventSink) QueueRemoteEvent(evt bridgev2.RemoteEvent) {
-	s.login.QueueRemoteEvent(evt)
+func (s *loginEventSink) QueueRemoteEvent(evt bridgev2.RemoteEvent) bridgev2.EventHandlingResult {
+	return s.login.QueueRemoteEvent(evt)
 }

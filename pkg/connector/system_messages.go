@@ -363,7 +363,7 @@ func placeForThread(threadID string) string {
 
 // systemMessageEvent is the remote event for a Teams system message in th,
 // or nil when the message is not one worth a line.
-func (c *TeamsClient) systemMessageEvent(th *teamsdb.ThreadState, msg model.RemoteMessage) bridgev2.RemoteEvent {
+func (c *TeamsClient) systemMessageEvent(th *teamsdb.ThreadState, msg model.RemoteMessage) *simplevent.Message[model.RemoteMessage] {
 	if _, ok := parseSystemMessage(msg.MessageType, msg.RawContent); !ok {
 		return nil
 	}

@@ -51,16 +51,20 @@ type TeamsClient struct {
 
 	syncMu     sync.Mutex
 	syncCancel context.CancelFunc
-	syncDone   chan struct{}
+	syncDone   chan struct{} // closed once every sync goroutine has returned
 
 	reach teamsReach // whether Teams is answering; see reachability.go
 
+	cursors threadCursors // queued and saved poll positions; see cursor_commit.go
+
+	// The maps below are swept every cacheSweepInterval; see cache_sweep.go.
+
 	reactionSeenMu sync.Mutex
-	reactionSeen   map[string]struct{}
-	reactionSigs   map[string]string // messageID -> last announced reaction signature
+	reactionSeen   map[string]time.Time  // messageID -> when its reactions were last announced
+	reactionSigs   map[string]stampedSig // messageID -> last announced reaction signature
 
 	chatInfoMu   sync.Mutex
-	chatInfoSigs map[string]string // threadID -> last announced chat info signature
+	chatInfoSigs map[string]stampedSig // threadID -> last announced chat info signature
 
 	teamNamesMu sync.Mutex
 	teamNames   map[string]string // teamID -> display name (from Graph teams/channels)
@@ -74,8 +78,7 @@ type TeamsClient struct {
 	longPollUp    atomic.Bool     // long-poll notifications are arriving
 	activityUp    atomic.Bool     // recent-conversation checks are working
 	unreadMu      sync.Mutex
-	unreadSeen    map[string]bool
-	unreadSent    map[string]bool
+	unreadSeen    map[string]bool // threads with incoming messages not yet marked read on Teams
 	selfMessageMu sync.Mutex
 	selfMessages  map[string]time.Time
 
@@ -154,7 +157,7 @@ func (c *TeamsClient) Connect(ctx context.Context) {
 	c.events = &loginEventSink{login: c.Login}
 	c.apiMu.Unlock()
 	if reachable {
-		log.Info().Str("teams_user_id", c.Meta.TeamsUserID).Msg("Connected to Teams")
+		log.Info().Str("teams_user_id", c.selfTeamsUserID()).Msg("Connected to Teams")
 		c.Login.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
 	}
 	// Ghosts named before their profile was known keep the raw Teams ID
@@ -200,6 +203,44 @@ func (c *TeamsClient) skypeTokenSnapshot() (string, int64) {
 	return c.Meta.SkypeToken, c.Meta.SkypeTokenExpiresAt
 }
 
+// selfTeamsUserID returns the user's own Teams ID under tokenMu; a token
+// refresh rewrites it while the loops and Matrix handlers read it.
+func (c *TeamsClient) selfTeamsUserID() string {
+	if c == nil {
+		return ""
+	}
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	if c.Meta == nil {
+		return ""
+	}
+	return c.Meta.TeamsUserID
+}
+
+// graphAccessToken returns the Graph access token under tokenMu, or an
+// error when there is none or it has expired.
+func (c *TeamsClient) graphAccessToken() (string, error) {
+	if c == nil {
+		return "", teamsid.ErrGraphAccessTokenMissing
+	}
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	return c.Meta.GetGraphAccessToken()
+}
+
+// regionAmsURL returns the tenant's regional AMS URL under tokenMu.
+func (c *TeamsClient) regionAmsURL() string {
+	if c == nil {
+		return ""
+	}
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	if c.Meta == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.Meta.RegionAmsURL)
+}
+
 // skypeToken returns the current Skype token under tokenMu.
 func (c *TeamsClient) skypeToken() string {
 	token, _ := c.skypeTokenSnapshot()
@@ -224,7 +265,7 @@ func (c *TeamsClient) IsThisUser(ctx context.Context, userID networkid.UserID) b
 		return false
 	}
 	return strings.TrimSpace(string(userID)) != "" &&
-		teamsUserIDToNetworkUserID(c.Meta.TeamsUserID) == userID
+		teamsUserIDToNetworkUserID(c.selfTeamsUserID()) == userID
 }
 
 func (c *TeamsClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*bridgev2.ChatInfo, error) {
@@ -265,7 +306,7 @@ func (c *TeamsClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) 
 		convs, convErr := c.getAPI().ListConversations(ctx, c.skypeToken())
 		if convErr == nil {
 			for _, conv := range convs {
-				thread, ok := conv.NormalizeForSelf(c.Meta.TeamsUserID)
+				thread, ok := conv.NormalizeForSelf(c.selfTeamsUserID())
 				if ok && thread.ID == threadID {
 					if topic := conv.ResolveTopic(); topic != "" {
 						info.Topic = &topic
@@ -321,7 +362,7 @@ func (c *TeamsClient) fetchUserAvatar(ctx context.Context, teamsUserID string) *
 	if err := c.ensureValidGraphToken(ctx); err != nil {
 		return nil
 	}
-	graphToken, err := c.Meta.GetGraphAccessToken()
+	graphToken, err := c.graphAccessToken()
 	if err != nil {
 		return nil
 	}
@@ -417,10 +458,7 @@ func (c *TeamsClient) FetchMessages(ctx context.Context, params bridgev2.FetchMe
 		return nil, err
 	}
 
-	selfID := ""
-	if c.Meta != nil {
-		selfID = model.NormalizeTeamsUserID(c.Meta.TeamsUserID)
-	}
+	selfID := model.NormalizeTeamsUserID(c.selfTeamsUserID())
 
 	backfillMsgs := make([]*bridgev2.BackfillMessage, 0, len(msgs))
 	for _, msg := range msgs {
@@ -658,11 +696,8 @@ func (c *TeamsClient) teamSpaceChatInfo(ctx context.Context, teamID string, port
 
 // remoteDisplayName is the name shown for this login (personal space name,
 // login listings): the user's Teams display name when known, else the ID.
-func (c *TeamsClient) remoteDisplayName(ctx context.Context) string {
-	id := ""
-	if c.Meta != nil {
-		id = c.Meta.TeamsUserID
-	}
+// The caller passes the ID, as it runs with tokenMu held.
+func (c *TeamsClient) remoteDisplayName(ctx context.Context, id string) string {
 	if c.Main != nil && c.Main.DB != nil && id != "" {
 		if profile, err := c.Main.DB.Profile.GetByTeamsUserID(ctx, id); err == nil && profile != nil && strings.TrimSpace(profile.DisplayName) != "" {
 			return strings.TrimSpace(profile.DisplayName)

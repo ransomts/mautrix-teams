@@ -49,7 +49,7 @@ func (c *TeamsClient) pollPresence(ctx context.Context) {
 		log.Debug().Err(err).Msg("Skipping presence poll: no valid graph token")
 		return
 	}
-	graphToken, err := c.Meta.GetGraphAccessToken()
+	graphToken, err := c.graphAccessToken()
 	if err != nil || graphToken == "" {
 		return
 	}

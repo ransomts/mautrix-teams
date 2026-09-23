@@ -39,9 +39,10 @@ func (c *TeamsClient) refreshThreads(ctx context.Context) error {
 		return err
 	}
 	log.Debug().Int("conversations", len(convs)).Msg("Fetched conversations from Teams")
+	selfID := c.selfTeamsUserID()
 
 	for _, conv := range convs {
-		thread, ok := conv.NormalizeForSelf(c.Meta.TeamsUserID)
+		thread, ok := conv.NormalizeForSelf(selfID)
 		if !ok || strings.TrimSpace(thread.ID) == "" || strings.TrimSpace(thread.ConversationID) == "" {
 			continue
 		}
@@ -65,14 +66,18 @@ func (c *TeamsClient) refreshThreads(ctx context.Context) error {
 		if existing, _ := c.Main.DB.ThreadState.Get(ctx, c.Login.ID, thread.ID); existing != nil {
 			storedName = chooseStoredName(thread.RoomName, existing.Name)
 		}
-		_ = c.Main.DB.ThreadState.Upsert(ctx, &teamsdb.ThreadState{
+		if err := c.Main.DB.ThreadState.Upsert(ctx, &teamsdb.ThreadState{
 			BridgeID:     c.Main.Bridge.ID,
 			UserLoginID:  c.Login.ID,
 			ThreadID:     thread.ID,
 			Conversation: thread.ConversationID,
 			IsOneToOne:   thread.IsOneToOne,
 			Name:         storedName,
-		})
+		}); err != nil {
+			// Without a row the thread is not polled; the next discovery
+			// tries again.
+			log.Warn().Err(err).Str("thread_id", thread.ID).Msg("Failed to save discovered thread")
+		}
 
 		name := storedName
 		roomType := ptrRoomType(thread.IsOneToOne)
@@ -166,11 +171,13 @@ func (c *TeamsClient) chatInfoChangedWithPrev(threadID string, sig string) (stri
 	c.chatInfoMu.Lock()
 	defer c.chatInfoMu.Unlock()
 	if c.chatInfoSigs == nil {
-		c.chatInfoSigs = make(map[string]string)
+		c.chatInfoSigs = make(map[string]stampedSig)
 	}
 	prev, known := c.chatInfoSigs[threadID]
-	c.chatInfoSigs[threadID] = sig
-	return prev, !known || prev != sig
+	// Discovery checks every listed thread each pass, which keeps the
+	// entries of live threads from expiring.
+	c.chatInfoSigs[threadID] = stampedSig{sig: sig, at: time.Now()}
+	return prev.sig, !known || prev.sig != sig
 }
 
 // dmCounterpartFromThreadID returns the Teams user ID of the other member
@@ -188,7 +195,7 @@ func (c *TeamsClient) dmCounterpartFromThreadID(threadID string) string {
 		return ""
 	}
 	// Self user ID is like "8:orgid:UUID" — extract just the UUID part.
-	selfUUID := c.Meta.TeamsUserID
+	selfUUID := c.selfTeamsUserID()
 	if idx := strings.LastIndex(selfUUID, ":"); idx >= 0 {
 		selfUUID = selfUUID[idx+1:]
 	}
@@ -301,7 +308,7 @@ func (c *TeamsClient) dmMemberListFromThreadID(threadID string) *bridgev2.ChatMe
 	if other == "" || c.Meta == nil || c.Login == nil {
 		return nil
 	}
-	selfID := model.NormalizeTeamsUserID(c.Meta.TeamsUserID)
+	selfID := model.NormalizeTeamsUserID(c.selfTeamsUserID())
 	c.trackKnownUser(other)
 	memberMap := make(bridgev2.ChatMemberMap)
 	memberMap.Set(bridgev2.ChatMember{
@@ -335,7 +342,7 @@ func (c *TeamsClient) resolveUnnamedGroupChats(ctx context.Context) {
 	}
 	selfID := ""
 	if c.Meta != nil {
-		selfID = c.Meta.TeamsUserID
+		selfID = c.selfTeamsUserID()
 	}
 	for _, th := range threads {
 		if th.IsOneToOne || !isGenericChatName(th.Name) || !isGroupChatThread(th.ThreadID) {
@@ -601,7 +608,7 @@ func (c *TeamsClient) fetchTeamChannelMap(ctx context.Context) map[string]graph.
 		zerolog.Ctx(ctx).Warn().Err(err).Msg("Cannot fetch team/channel names: graph token unavailable")
 		return nil
 	}
-	graphToken, err := c.Meta.GetGraphAccessToken()
+	graphToken, err := c.graphAccessToken()
 	if err != nil {
 		return nil
 	}
@@ -622,7 +629,7 @@ func (c *TeamsClient) fetchTeamChannelMap(ctx context.Context) map[string]graph.
 func (c *TeamsClient) buildChatMemberList(conv model.RemoteConversation, isOneToOne bool) *bridgev2.ChatMemberList {
 	selfID := ""
 	if c.Meta != nil {
-		selfID = model.NormalizeTeamsUserID(c.Meta.TeamsUserID)
+		selfID = model.NormalizeTeamsUserID(c.selfTeamsUserID())
 	}
 
 	memberMap := make(bridgev2.ChatMemberMap)

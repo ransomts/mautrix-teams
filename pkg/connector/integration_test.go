@@ -288,10 +288,13 @@ type capturingEventSink struct {
 	events []bridgev2.RemoteEvent
 }
 
-func (s *capturingEventSink) QueueRemoteEvent(evt bridgev2.RemoteEvent) {
+func (s *capturingEventSink) QueueRemoteEvent(evt bridgev2.RemoteEvent) bridgev2.EventHandlingResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = append(s.events, evt)
+	// Like bridgev2's default: queued for the portal's event loop, which
+	// tests do not run.
+	return bridgev2.EventHandlingResultQueued
 }
 
 func (s *capturingEventSink) getEvents() []bridgev2.RemoteEvent {

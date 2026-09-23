@@ -41,7 +41,7 @@ func (c *TeamsClient) sendAttachmentMessageWithClientMessageID(ctx context.Conte
 
 	api := c.getAPI()
 
-	graphToken, err := c.Meta.GetGraphAccessToken()
+	graphToken, err := c.graphAccessToken()
 	if err != nil {
 		return "", err
 	}
@@ -64,7 +64,7 @@ func (c *TeamsClient) sendAttachmentMessageWithClientMessageID(ctx context.Conte
 		Graph:             gc,
 		Teams:             api,
 		Log:               &c.Login.Log,
-		FromUserID:        strings.TrimSpace(c.Meta.TeamsUserID),
+		FromUserID:        strings.TrimSpace(c.selfTeamsUserID()),
 		MaxBytes:          internalbridge.MaxAttachmentBytesV0,
 		GenerateMessageID: gen,
 	}

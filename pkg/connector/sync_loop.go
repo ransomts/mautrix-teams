@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -32,6 +33,30 @@ const (
 )
 
 func (c *TeamsClient) startSyncLoop() {
+	c.startSyncTasks(c.syncLoop)
+}
+
+// syncTasks runs the sync loop's goroutines and knows when all of them have
+// returned, so that stopping the loop can wait for the long-poll and
+// presence loops too, not just the poll loop. Otherwise they could keep
+// polling (and refreshing tokens) after Disconnect or next to the client a
+// re-login starts.
+type syncTasks struct {
+	wg sync.WaitGroup
+}
+
+// Go runs f in a goroutine that stopping the sync loop waits for.
+func (t *syncTasks) Go(f func()) {
+	t.wg.Add(1)
+	go func() {
+		defer t.wg.Done()
+		f()
+	}()
+}
+
+// startSyncTasks runs run as the root sync goroutine, unless one is running.
+// run starts the others through tasks.
+func (c *TeamsClient) startSyncTasks(run func(ctx context.Context, tasks *syncTasks)) {
 	if c == nil || c.Login == nil {
 		return
 	}
@@ -42,13 +67,20 @@ func (c *TeamsClient) startSyncLoop() {
 	}
 	ctx, cancel := context.WithCancel(c.Login.Log.WithContext(context.Background()))
 	c.syncCancel = cancel
-	c.syncDone = make(chan struct{})
+	done := make(chan struct{})
+	c.syncDone = done
+	tasks := &syncTasks{}
+	// run is counted before anything waits, and starts the others while it
+	// is still counted, so the count cannot reach zero early.
+	tasks.Go(func() { run(ctx, tasks) })
 	go func() {
-		defer close(c.syncDone)
-		c.syncLoop(ctx)
+		tasks.wg.Wait()
+		close(done)
 	}()
 }
 
+// stopSyncLoop cancels the sync goroutines and waits up to timeout (for
+// ever if timeout <= 0) for all of them to return.
 func (c *TeamsClient) stopSyncLoop(timeout time.Duration) {
 	c.syncMu.Lock()
 	cancel := c.syncCancel
@@ -72,10 +104,13 @@ func (c *TeamsClient) stopSyncLoop(timeout time.Duration) {
 	select {
 	case <-done:
 	case <-timer.C:
+		// A request stuck past its context; it ends when that request does.
+		log := c.log()
+		log.Warn().Dur("timeout", timeout).Msg("Sync goroutines still running after stop timeout")
 	}
 }
 
-func (c *TeamsClient) syncLoop(ctx context.Context) {
+func (c *TeamsClient) syncLoop(ctx context.Context, tasks *syncTasks) {
 	log := zerolog.Ctx(ctx)
 	// Run once immediately to seed portals.
 	err := c.syncOnce(ctx)
@@ -84,7 +119,7 @@ func (c *TeamsClient) syncLoop(ctx context.Context) {
 	}
 
 	// Start presence polling in a separate goroutine.
-	go c.presenceLoop(ctx)
+	tasks.Go(func() { c.presenceLoop(ctx) })
 
 	// Choose sync mode based on config.
 	syncMode := "poll"
@@ -97,12 +132,12 @@ func (c *TeamsClient) syncLoop(ctx context.Context) {
 		// name; the poll loop keeps running as a backstop, at a slower idle
 		// cadence while notifications arrive, and alone if they stop.
 		log.Info().Msg("Starting Teams long-poll sync mode")
-		go func() {
+		tasks.Go(func() {
 			if lpErr := c.longPollLoop(ctx); lpErr != nil && !loopStopped(lpErr) {
 				log.Warn().Err(lpErr).Msg("Long-poll loop failed, polling alone")
 			}
 			c.longPollUp.Store(false)
-		}()
+		})
 		if err := c.pollDueThreads(ctx, err == nil); err != nil && !loopStopped(err) {
 			log.Err(err).Msg("Teams polling loop exited")
 		}
@@ -215,7 +250,7 @@ func (c *TeamsClient) presenceLoop(ctx context.Context) {
 				return
 			}
 			if c.Meta != nil {
-				if graphToken, err := c.Meta.GetGraphAccessToken(); err == nil && graphToken != "" {
+				if graphToken, err := c.graphAccessToken(); err == nil && graphToken != "" {
 					c.pollPresence(ctx)
 				}
 			}
@@ -414,7 +449,12 @@ func (c *TeamsClient) ensureValidSkypeToken(ctx context.Context) error {
 	if skResult.AmsURL != "" {
 		c.Meta.RegionAmsURL = skResult.AmsURL
 	}
-	c.Login.RemoteName = c.remoteDisplayName(ctx)
+	// bridgev2 reads RemoteName from its own goroutines without a lock, so
+	// only write it when it actually changes (once per login, not on every
+	// refresh).
+	if name := c.remoteDisplayName(ctx, c.Meta.TeamsUserID); name != c.Login.RemoteName {
+		c.Login.RemoteName = name
+	}
 	c.refreshCachedConsumerTokenLocked()
 
 	log.Info().

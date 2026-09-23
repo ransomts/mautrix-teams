@@ -44,7 +44,7 @@ func (c *TeamsClient) pollConsumptionHorizons(ctx context.Context, th *teamsdb.T
 		return err
 	}
 
-	selfID := model.NormalizeTeamsUserID(c.Meta.TeamsUserID)
+	selfID := model.NormalizeTeamsUserID(c.selfTeamsUserID())
 	if selfID == "" {
 		return nil
 	}

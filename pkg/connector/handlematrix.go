@@ -48,7 +48,7 @@ func (c *TeamsClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 	now := time.Now().UTC()
 	pendingMessage := &database.Message{
 		ID:        networkid.MessageID(clientMessageID),
-		SenderID:  teamsUserIDToNetworkUserID(c.Meta.TeamsUserID),
+		SenderID:  teamsUserIDToNetworkUserID(c.selfTeamsUserID()),
 		Timestamp: now,
 	}
 	msg.AddPendingToSave(pendingMessage, networkid.TransactionID(clientMessageID), nil)
@@ -78,14 +78,14 @@ func (c *TeamsClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 			replyToID = string(msg.ReplyTo.ID)
 			body = c.buildTeamsReplyHTML(ctx, threadID, replyToID, body)
 		}
-		_, err = api.SendFormattedMessage(ctx, threadID, body, c.Meta.TeamsUserID, clientMessageID, replyToID, mentionProps)
+		_, err = api.SendFormattedMessage(ctx, threadID, body, c.selfTeamsUserID(), clientMessageID, replyToID, mentionProps)
 	case event.MsgImage:
 		title, gifURL, ok := extractOutboundGIF(msg.Content)
 		if !ok {
 			err = c.sendOutboundAttachment(ctx, msg.Portal.MXID, threadID, msg.Content, clientMessageID)
 			break
 		}
-		_, err = api.SendGIFWithID(ctx, threadID, gifURL, title, c.Meta.TeamsUserID, clientMessageID)
+		_, err = api.SendGIFWithID(ctx, threadID, gifURL, title, c.selfTeamsUserID(), clientMessageID)
 	case event.MsgFile, event.MsgVideo, event.MsgAudio:
 		err = c.sendOutboundAttachment(ctx, msg.Portal.MXID, threadID, msg.Content, clientMessageID)
 	default:
@@ -127,7 +127,7 @@ func (c *TeamsClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2
 	if msg == nil || msg.Content == nil {
 		return bridgev2.MatrixReactionPreResponse{}, errors.New("missing reaction content")
 	}
-	if strings.TrimSpace(c.Meta.TeamsUserID) == "" {
+	if strings.TrimSpace(c.selfTeamsUserID()) == "" {
 		return bridgev2.MatrixReactionPreResponse{}, errors.New("missing teams user id")
 	}
 	emoji := strings.TrimSpace(msg.Content.RelatesTo.Key)
@@ -136,7 +136,7 @@ func (c *TeamsClient) PreHandleMatrixReaction(ctx context.Context, msg *bridgev2
 		return bridgev2.MatrixReactionPreResponse{}, errUnsupportedReactionEmoji
 	}
 	return bridgev2.MatrixReactionPreResponse{
-		SenderID: teamsUserIDToNetworkUserID(c.Meta.TeamsUserID),
+		SenderID: teamsUserIDToNetworkUserID(c.selfTeamsUserID()),
 		EmojiID:  networkid.EmojiID(emotionKey),
 		Emoji:    emoji,
 	}, nil
@@ -237,7 +237,7 @@ func (c *TeamsClient) HandleMatrixTyping(ctx context.Context, msg *bridgev2.Matr
 	if threadID == "" {
 		return errors.New("missing thread id")
 	}
-	_, err := c.getAPI().SendTypingIndicator(ctx, threadID, c.Meta.TeamsUserID)
+	_, err := c.getAPI().SendTypingIndicator(ctx, threadID, c.selfTeamsUserID())
 	return err
 }
 
@@ -263,22 +263,17 @@ func (c *TeamsClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev2
 	return err
 }
 
+// shouldSendReceipt reports whether a Matrix read receipt in threadID
+// should mark it read on Teams: once per run of incoming messages. The
+// entry goes once used; a thread with no entry has nothing unread, so the
+// map holds only threads with unread messages.
 func (c *TeamsClient) shouldSendReceipt(threadID string) bool {
 	c.unreadMu.Lock()
 	defer c.unreadMu.Unlock()
-	if c.unreadSeen == nil {
-		c.unreadSeen = make(map[string]bool)
-	}
-	if c.unreadSent == nil {
-		c.unreadSent = make(map[string]bool)
-	}
 	if !c.unreadSeen[threadID] {
 		return false
 	}
-	if c.unreadSent[threadID] {
-		return false
-	}
-	c.unreadSent[threadID] = true
+	delete(c.unreadSeen, threadID)
 	return true
 }
 
@@ -306,7 +301,7 @@ func (c *TeamsClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.Matrix
 	if msg.Content.Format == event.FormatHTML && msg.Content.FormattedBody != "" {
 		newBody = msg.Content.FormattedBody
 	}
-	err := c.getAPI().EditMessage(ctx, threadID, teamsMessageID, newBody, c.Meta.TeamsUserID)
+	err := c.getAPI().EditMessage(ctx, threadID, teamsMessageID, newBody, c.selfTeamsUserID())
 	if err != nil {
 		log.Warn().Err(err).Str("thread_id", threadID).Str("target_id", teamsMessageID).Msg("Failed to edit Teams message")
 	}
@@ -333,7 +328,7 @@ func (c *TeamsClient) HandleMatrixMessageRemove(ctx context.Context, msg *bridge
 		return errors.New("missing teams message id for delete target")
 	}
 	log.Debug().Str("thread_id", threadID).Str("target_id", teamsMessageID).Msg("Deleting Teams message")
-	return c.getAPI().DeleteMessage(ctx, threadID, teamsMessageID, c.Meta.TeamsUserID)
+	return c.getAPI().DeleteMessage(ctx, threadID, teamsMessageID, c.selfTeamsUserID())
 }
 
 // buildTeamsReplyHTML fetches the original message and wraps body with a populated blockquote.
@@ -588,9 +583,5 @@ func (c *TeamsClient) markUnread(threadID string) {
 	if c.unreadSeen == nil {
 		c.unreadSeen = make(map[string]bool)
 	}
-	if c.unreadSent == nil {
-		c.unreadSent = make(map[string]bool)
-	}
 	c.unreadSeen[threadID] = true
-	c.unreadSent[threadID] = false
 }

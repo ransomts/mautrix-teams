@@ -65,7 +65,7 @@ func (c *TeamsClient) ResolveIdentifier(ctx context.Context, identifier string, 
 	}
 
 	if createChat {
-		selfMRI := "8:orgid:" + extractObjectIDFromMRI(c.Meta.TeamsUserID)
+		selfMRI := "8:orgid:" + extractObjectIDFromMRI(c.selfTeamsUserID())
 		targetMRI := "8:orgid:" + user.ID
 
 		threadID, err := c.getAPI().CreateConversation(ctx, []string{selfMRI, targetMRI})
@@ -128,7 +128,7 @@ func (c *TeamsClient) CreateGroup(ctx context.Context, params *bridgev2.GroupCre
 		return nil, errors.New("at least one participant is required")
 	}
 
-	selfMRI := "8:orgid:" + extractObjectIDFromMRI(c.Meta.TeamsUserID)
+	selfMRI := "8:orgid:" + extractObjectIDFromMRI(c.selfTeamsUserID())
 	mris := []string{selfMRI}
 	for _, uid := range params.Participants {
 		mri := "8:orgid:" + extractObjectIDFromMRI(string(uid))
@@ -155,7 +155,7 @@ func (c *TeamsClient) CreateGroup(ctx context.Context, params *bridgev2.GroupCre
 
 // getGraphClient creates a GraphClient with the current Graph access token.
 func (c *TeamsClient) getGraphClient(ctx context.Context) (*graph.GraphClient, error) {
-	graphToken, err := c.Meta.GetGraphAccessToken()
+	graphToken, err := c.graphAccessToken()
 	if err != nil || graphToken == "" {
 		return nil, fmt.Errorf("no graph access token available")
 	}

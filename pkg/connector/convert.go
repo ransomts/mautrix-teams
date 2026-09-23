@@ -322,13 +322,13 @@ func (c *TeamsClient) reuploadInboundAttachments(
 	regionAmsURL := ""
 	if c.Meta != nil {
 		skypeToken = strings.TrimSpace(c.skypeToken())
-		regionAmsURL = strings.TrimSpace(c.Meta.RegionAmsURL)
+		regionAmsURL = c.regionAmsURL()
 	}
 
 	// Try to get Graph client for DriveItemID-based downloads.
 	var gc *graph.GraphClient
 	if err := c.ensureValidGraphToken(ctx); err == nil {
-		if graphToken, err := c.Meta.GetGraphAccessToken(); err == nil {
+		if graphToken, err := c.graphAccessToken(); err == nil {
 			gc = graph.NewClient(httpClient)
 			gc.AccessToken = graphToken
 			gc.MaxUploadSize = internalbridge.MaxAttachmentBytesV0
@@ -441,7 +441,7 @@ func (c *TeamsClient) reuploadInlineImages(
 	}
 
 	// Rewrite AMS URLs to use enterprise region endpoint when available.
-	regionAmsURL := strings.TrimSpace(c.Meta.RegionAmsURL)
+	regionAmsURL := c.regionAmsURL()
 
 	log := c.Login.Log
 	var parts []*bridgev2.ConvertedMessagePart

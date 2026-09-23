@@ -28,13 +28,16 @@ func (c *TeamsClient) queueReactionSyncForMessage(ctx context.Context, th *teams
 	if messageID == "" {
 		return
 	}
-	messageID = c.resolveReactionSyncTargetMessageID(ctx, th.ThreadID, messageID, msg)
-
 	// Every poll page carries the same old messages again; only re-announce
-	// a message's reactions when the set actually changed since we last saw it.
+	// a message's reactions when the set actually changed since we last saw
+	// it. This check comes before resolving the target, which can take a
+	// database lookup per candidate ID, as it rules out nearly every
+	// message on nearly every poll. It is keyed by the ID as polled, which
+	// is stable for a message across polls.
 	if !c.reactionStateChanged(messageID, reactionSignature(msg.Reactions)) {
 		return
 	}
+	messageID = resolveReactionTarget(c, ctx, th.ThreadID, messageID, msg)
 
 	data, hasReactions := c.buildReactionSyncData(msg.Reactions)
 	if !hasReactions && !c.shouldSendEmptyReactionSync(ctx, th.ThreadID, messageID) {
@@ -62,7 +65,7 @@ func (c *TeamsClient) buildReactionSyncData(reactions []model.MessageReaction) (
 	users := make(map[networkid.UserID]*bridgev2.ReactionSyncUser)
 	selfID := model.NormalizeTeamsUserID("")
 	if c != nil && c.Meta != nil {
-		selfID = model.NormalizeTeamsUserID(c.Meta.TeamsUserID)
+		selfID = model.NormalizeTeamsUserID(c.selfTeamsUserID())
 	}
 
 	for _, reaction := range reactions {
@@ -149,33 +152,43 @@ func reactionSignature(reactions []model.MessageReaction) string {
 
 // reactionStateChanged records sig for messageID and reports whether it
 // differs from the previously recorded one. The first sighting counts as a
-// change so state is announced once after startup.
+// change so state is announced once after startup. Every check refreshes
+// the entry's age, so only messages no longer polled expire.
 func (c *TeamsClient) reactionStateChanged(messageID string, sig string) bool {
 	c.reactionSeenMu.Lock()
 	defer c.reactionSeenMu.Unlock()
 	if c.reactionSigs == nil {
-		c.reactionSigs = make(map[string]string)
+		c.reactionSigs = make(map[string]stampedSig)
 	}
 	prev, known := c.reactionSigs[messageID]
-	c.reactionSigs[messageID] = sig
-	return !known || prev != sig
+	c.reactionSigs[messageID] = stampedSig{sig: sig, at: time.Now()}
+	return !known || prev.sig != sig
 }
 
+// markReactionSeen records (seen) or clears messageID as having announced
+// reactions and reports whether it had. Without an entry the caller falls
+// back to the bridge database, so an expired one only costs a lookup.
 func (c *TeamsClient) markReactionSeen(messageID string, seen bool) bool {
 	c.reactionSeenMu.Lock()
 	defer c.reactionSeenMu.Unlock()
 	if c.reactionSeen == nil {
-		c.reactionSeen = make(map[string]struct{})
+		c.reactionSeen = make(map[string]time.Time)
 	}
 	_, exists := c.reactionSeen[messageID]
 	if seen {
-		c.reactionSeen[messageID] = struct{}{}
+		c.reactionSeen[messageID] = time.Now()
 	} else if exists {
 		delete(c.reactionSeen, messageID)
 	}
 	return exists
 }
 
+// resolveReactionTarget is resolveReactionSyncTargetMessageID; tests swap
+// it to count lookups.
+var resolveReactionTarget = (*TeamsClient).resolveReactionSyncTargetMessageID
+
+// resolveReactionSyncTargetMessageID returns the ID the bridge stored the
+// message under, trying the forms an older bridge used too.
 func (c *TeamsClient) resolveReactionSyncTargetMessageID(ctx context.Context, threadID string, messageID string, msg model.RemoteMessage) string {
 	candidates := buildReactionTargetMessageIDCandidates(messageID, msg)
 	if len(candidates) == 0 {
