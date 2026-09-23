@@ -11,6 +11,7 @@ import (
 // TeamsAPI abstracts the Teams consumer HTTP client for testability.
 type TeamsAPI interface {
 	ListConversations(ctx context.Context, token string) ([]model.RemoteConversation, error)
+	ListRecentConversations(ctx context.Context, token string, pageSize int) ([]model.RemoteConversation, error)
 	ListMessages(ctx context.Context, conversationID string, sinceSequence string) ([]model.RemoteMessage, error)
 	GetMessage(ctx context.Context, conversationID string, messageID string) (*model.RemoteMessage, error)
 	ListMessagesPaginated(ctx context.Context, conversationID string, pageSize int, startTime string) ([]model.RemoteMessage, error)

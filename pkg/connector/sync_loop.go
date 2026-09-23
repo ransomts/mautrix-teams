@@ -21,6 +21,11 @@ const (
 	selfMessageTTL          = 5 * time.Minute
 	// longPollRetryDelay is how long to wait after a failed long-poll request.
 	longPollRetryDelay = 2 * time.Second
+	// longPollMaxRetryDelay caps the backoff between failed long-poll requests.
+	longPollMaxRetryDelay = 60 * time.Second
+	// longPollReregisterAfter is how many failures in a row trigger a fresh
+	// endpoint registration.
+	longPollReregisterAfter = 3
 	// presenceInitialDelay lets thread discovery populate known users before
 	// the first presence poll.
 	presenceInitialDelay = 10 * time.Second
@@ -88,13 +93,18 @@ func (c *TeamsClient) syncLoop(ctx context.Context) {
 	}
 
 	if syncMode == "longpoll" {
+		// Long-poll notifications wake the poll loop for the threads they
+		// name; the poll loop keeps running as a backstop, at a slower idle
+		// cadence while notifications arrive, and alone if they stop.
 		log.Info().Msg("Starting Teams long-poll sync mode")
-		if lpErr := c.longPollLoop(ctx, err == nil); lpErr != nil && !loopStopped(lpErr) {
-			log.Warn().Err(lpErr).Msg("Long-poll loop failed, falling back to short-polling")
-			// Fall back to regular polling.
-			if err := c.pollDueThreads(ctx, true); err != nil && !loopStopped(err) {
-				log.Err(err).Msg("Teams polling loop exited")
+		go func() {
+			if lpErr := c.longPollLoop(ctx); lpErr != nil && !loopStopped(lpErr) {
+				log.Warn().Err(lpErr).Msg("Long-poll loop failed, polling alone")
 			}
+			c.longPollUp.Store(false)
+		}()
+		if err := c.pollDueThreads(ctx, err == nil); err != nil && !loopStopped(err) {
+			log.Err(err).Msg("Teams polling loop exited")
 		}
 	} else {
 		// Default: short-polling with adaptive backoff.
@@ -110,10 +120,11 @@ func loopStopped(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, errClientSuperseded)
 }
 
-// longPollLoop uses the Teams Consumer API long-polling endpoint for lower latency
-// event delivery. It registers a notification endpoint, then enters a long-poll loop.
-// When events arrive, it polls the affected threads for new messages.
-func (c *TeamsClient) longPollLoop(ctx context.Context, initialDiscoverySucceeded bool) error {
+// longPollLoop holds a Teams long-poll request open and asks the poll loop to
+// poll every thread an event names. It runs until ctx ends or registration
+// fails; a failing endpoint (expired, or lost with the network) is registered
+// afresh after longPollReregisterAfter failures in a row.
+func (c *TeamsClient) longPollLoop(ctx context.Context) error {
 	log := zerolog.Ctx(ctx)
 
 	if err := c.ensureValidSkypeToken(ctx); err != nil {
@@ -127,11 +138,7 @@ func (c *TeamsClient) longPollLoop(ctx context.Context, initialDiscoverySucceede
 	log.Info().Str("endpoint_id", endpointID).Msg("Registered Teams long-poll endpoint")
 
 	const pollTimeout = 30 * time.Second
-	nextDiscovery := time.Now().UTC().Add(threadDiscoveryInterval)
-	if !initialDiscoverySucceeded {
-		nextDiscovery = time.Time{}
-	}
-
+	failures := 0
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -139,16 +146,6 @@ func (c *TeamsClient) longPollLoop(ctx context.Context, initialDiscoverySucceede
 		if c.superseded() {
 			return errClientSuperseded
 		}
-
-		// Periodic thread discovery refresh.
-		now := time.Now().UTC()
-		if nextDiscovery.IsZero() || !now.Before(nextDiscovery) {
-			if err := c.refreshThreads(ctx); err != nil {
-				log.Err(err).Msg("Teams thread discovery refresh failed (longpoll mode)")
-			}
-			nextDiscovery = now.Add(threadDiscoveryInterval)
-		}
-
 		if err := c.ensureValidSkypeToken(ctx); err != nil {
 			return err
 		}
@@ -159,36 +156,40 @@ func (c *TeamsClient) longPollLoop(ctx context.Context, initialDiscoverySucceede
 			if errors.Is(err, context.Canceled) {
 				return err
 			}
-			log.Warn().Err(err).Msg("Long-poll request failed, will retry")
+			c.longPollUp.Store(false)
+			failures++
+			log.Warn().Err(err).Int("failures", failures).Msg("Long-poll request failed, will retry")
+			if failures%longPollReregisterAfter == 0 {
+				if id, regErr := consumer.RegisterEndpoint(ctx); regErr != nil {
+					log.Warn().Err(regErr).Msg("Long-poll endpoint re-registration failed")
+				} else {
+					endpointID = id
+					log.Info().Str("endpoint_id", endpointID).Msg("Re-registered Teams long-poll endpoint")
+				}
+			}
+			delay := longPollRetryDelay << min(failures-1, 5)
+			if delay > longPollMaxRetryDelay {
+				delay = longPollMaxRetryDelay
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(longPollRetryDelay):
+			case <-time.After(delay):
 			}
 			continue
 		}
+		failures = 0
+		c.longPollUp.Store(true)
 
-		if len(events) == 0 {
-			continue
-		}
-
-		// Collect unique thread IDs from events and poll them.
-		affectedThreads := make(map[string]bool)
 		for _, evt := range events {
 			threadID := consumerclient.ExtractThreadIDFromResource(evt.Resource)
-			if threadID != "" {
-				affectedThreads[threadID] = true
+			log.Debug().Str("resource_type", evt.ResourceType).Str("thread_id", threadID).Msg("Long-poll event")
+			if threadID == "" {
+				continue
 			}
-		}
-
-		threads, err := c.Main.DB.ThreadState.ListForLogin(ctx, c.Login.ID)
-		if err != nil {
-			continue
-		}
-		for _, th := range threads {
-			if affectedThreads[th.ThreadID] || affectedThreads[th.Conversation] {
-				_, _ = c.pollThread(ctx, th, time.Now().UTC())
-			}
+			// Anything but a message may be a read-position change.
+			receipts := evt.ResourceType != "NewMessage" && evt.ResourceType != "MessageUpdate"
+			c.requestPoll(threadID, receipts)
 		}
 	}
 }

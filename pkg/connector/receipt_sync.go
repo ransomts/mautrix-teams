@@ -18,8 +18,6 @@ import (
 	"go.mau.fi/mautrix-teams/pkg/teamsdb"
 )
 
-const receiptPollInterval = 30 * time.Second
-
 const getLastMessagePartBySenderAtOrBeforeTimeQuery = `
 	SELECT id
 	FROM message
@@ -164,8 +162,14 @@ func (c *TeamsClient) shouldPollReceipts(threadID string, now time.Time) bool {
 	if c.receiptPoll == nil {
 		c.receiptPoll = make(map[string]time.Time)
 	}
+	// A thread with a recent own send is checked on every poll, which
+	// follows the thread's cadence; others every receiptIdlePollInterval.
+	interval := receiptIdlePollInterval
+	if active, ok := c.threadActive[threadID]; ok && now.Sub(active) < threadActiveWindow {
+		interval = 0
+	}
 	last := c.receiptPoll[threadID]
-	if !last.IsZero() && now.Sub(last) < receiptPollInterval {
+	if !last.IsZero() && now.Sub(last) < interval {
 		return false
 	}
 	c.receiptPoll[threadID] = now

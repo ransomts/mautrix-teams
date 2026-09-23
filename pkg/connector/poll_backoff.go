@@ -18,6 +18,9 @@ const (
 type PollBackoff struct {
 	Failures int
 	Delay    time.Duration
+	// IdleCap overrides pollIdleCap when set; the poll loop raises it while
+	// long-poll notifications make polling a backstop only.
+	IdleCap time.Duration
 }
 
 func (b *PollBackoff) ensureBaseDelay() time.Duration {
@@ -38,8 +41,12 @@ func (b *PollBackoff) OnIdle() {
 	current := b.ensureBaseDelay()
 	b.Failures = 0
 	next := current + pollBaseDelay
-	if next > pollIdleCap {
-		next = pollIdleCap
+	idleCap := pollIdleCap
+	if b.IdleCap > 0 {
+		idleCap = b.IdleCap
+	}
+	if next > idleCap {
+		next = idleCap
 	}
 	b.Delay = next
 }

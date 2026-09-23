@@ -17,8 +17,9 @@ import (
 )
 
 type pollState struct {
-	backoff  PollBackoff
-	nextPoll time.Time
+	backoff      PollBackoff
+	nextPoll     time.Time
+	conversation string // the thread's conversation ID, for matching wakeups
 }
 
 const (
@@ -68,6 +69,8 @@ func (c *TeamsClient) pollDueThreads(ctx context.Context, initialDiscoverySuccee
 	if !initialDiscoverySucceeded {
 		nextDiscovery = time.Time{}
 	}
+	var nextActivity time.Time
+	lastSeen := make(map[string]string)
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -82,7 +85,14 @@ func (c *TeamsClient) pollDueThreads(ctx context.Context, initialDiscoverySuccee
 			}
 			nextDiscovery = now.Add(threadDiscoveryInterval)
 		}
+		if !now.Before(nextActivity) {
+			c.checkActivity(ctx, states, lastSeen)
+			nextActivity = now.Add(activityCheckInterval)
+		}
 		nextWake := now.Add(pollLoopMaxSleep)
+		if nextActivity.Before(nextWake) {
+			nextWake = nextActivity
+		}
 
 		threads, err := c.Main.DB.ThreadState.ListForLogin(ctx, c.Login.ID)
 		if err != nil {
@@ -97,6 +107,7 @@ func (c *TeamsClient) pollDueThreads(ctx context.Context, initialDiscoverySuccee
 				ps = &pollState{backoff: PollBackoff{Delay: pollBaseDelay}, nextPoll: now}
 				states[th.ThreadID] = ps
 			}
+			ps.conversation = th.Conversation
 			if now.Before(ps.nextPoll) {
 				if ps.nextPoll.Before(nextWake) {
 					nextWake = ps.nextPoll
@@ -105,7 +116,13 @@ func (c *TeamsClient) pollDueThreads(ctx context.Context, initialDiscoverySuccee
 			}
 
 			ingested, err := c.pollThread(ctx, th, now)
-			delay, _ := ApplyPollBackoff(&ps.backoff, ingested, err)
+			ps.backoff.IdleCap = c.idleCapFor(th.ThreadID, now)
+			delay, reason := ApplyPollBackoff(&ps.backoff, ingested, err)
+			if reason == PollBackoffIdle && ps.backoff.IdleCap == pollBackstopIdleCap {
+				// Changes are watched: an idle thread needs no gradual ramp.
+				ps.backoff.Delay = pollBackstopIdleCap
+				delay = pollBackstopIdleCap
+			}
 			ps.nextPoll = now.Add(delay)
 			if ps.nextPoll.Before(nextWake) {
 				nextWake = ps.nextPoll
@@ -122,6 +139,18 @@ func (c *TeamsClient) pollDueThreads(ctx context.Context, initialDiscoverySuccee
 			timer.Stop()
 			return ctx.Err()
 		case <-timer.C:
+		case w := <-c.wakeChan():
+			timer.Stop()
+			c.applyWakeup(w, states)
+			// Take every queued wakeup before the next pass.
+			for drained := false; !drained; {
+				select {
+				case w := <-c.wakeChan():
+					c.applyWakeup(w, states)
+				default:
+					drained = true
+				}
+			}
 		}
 	}
 }

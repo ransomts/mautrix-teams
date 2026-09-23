@@ -42,6 +42,9 @@ type RemoteConversation struct {
 	Members          []ConversationMember   `json:"members"`
 	Participants     []ConversationMember   `json:"participants"`
 	Consumers        []ConversationMember   `json:"consumers"`
+	LastMessage      struct {
+		ID string `json:"id"`
+	} `json:"lastMessage"`
 }
 
 const defaultRoomName = "Chat"

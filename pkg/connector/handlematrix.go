@@ -99,6 +99,10 @@ func (c *TeamsClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 	}
 	log.Debug().Str("thread_id", threadID).Str("client_message_id", clientMessageID).Msg("Sent message to Teams")
 	c.recordSelfMessage(clientMessageID)
+	// Fetch the echo now rather than at the thread's next poll: bridgev2
+	// sends the delivery receipt only when it arrives.
+	c.noteThreadActive(threadID, now)
+	c.requestPoll(threadID, false)
 
 	return &bridgev2.MatrixMessageResponse{
 		DB:          pendingMessage,

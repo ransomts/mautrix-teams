@@ -29,6 +29,11 @@ func TestExtractThreadIDFromResource(t *testing.T) {
 			want:     "",
 		},
 		{
+			name:     "thread update",
+			resource: "/v1/threads/19:abc@thread.v2",
+			want:     "19:abc@thread.v2",
+		},
+		{
 			name:     "properties path",
 			resource: "/v1/users/ME/conversations/19:chat@thread.v2/properties",
 			want:     "19:chat@thread.v2",

@@ -98,6 +98,10 @@ func (m *mockTeamsAPI) ListConversations(_ context.Context, _ string) ([]model.R
 	return m.conversations, nil
 }
 
+func (m *mockTeamsAPI) ListRecentConversations(ctx context.Context, token string, _ int) ([]model.RemoteConversation, error) {
+	return m.ListConversations(ctx, token)
+}
+
 func (m *mockTeamsAPI) ListMessages(_ context.Context, _ string, _ string) ([]model.RemoteMessage, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

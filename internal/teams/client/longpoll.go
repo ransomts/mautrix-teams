@@ -261,6 +261,10 @@ func (c *Client) longPollHTTP() *http.Client {
 func ExtractThreadIDFromResource(resource string) string {
 	parts := strings.Split(resource, "/conversations/")
 	if len(parts) < 2 {
+		// Thread updates name the thread directly: /v1/threads/<id>.
+		parts = strings.Split(resource, "/threads/")
+	}
+	if len(parts) < 2 {
 		return ""
 	}
 	rest := parts[1]

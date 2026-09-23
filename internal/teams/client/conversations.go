@@ -62,12 +62,29 @@ func NewClient(httpClient *http.Client) *Client {
 }
 
 func (c *Client) ListConversations(ctx context.Context, token string) ([]model.RemoteConversation, error) {
+	return c.listConversations(ctx, token, 0)
+}
+
+// ListRecentConversations returns the pageSize most recently active
+// conversations; the chat service lists them newest first.
+func (c *Client) ListRecentConversations(ctx context.Context, token string, pageSize int) ([]model.RemoteConversation, error) {
+	return c.listConversations(ctx, token, pageSize)
+}
+
+func (c *Client) listConversations(ctx context.Context, token string, pageSize int) ([]model.RemoteConversation, error) {
 	if c == nil || c.HTTP == nil {
 		return nil, ErrMissingHTTPClient
 	}
 	endpoint := c.ConversationsURL
 	if endpoint == "" {
 		endpoint = defaultConversationsURL
+	}
+	if pageSize > 0 {
+		sep := "?"
+		if strings.Contains(endpoint, "?") {
+			sep = "&"
+		}
+		endpoint += fmt.Sprintf("%spageSize=%d", sep, pageSize)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)

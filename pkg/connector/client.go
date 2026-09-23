@@ -67,6 +67,12 @@ type TeamsClient struct {
 
 	receiptPollMu sync.Mutex
 	receiptPoll   map[string]time.Time
+	threadActive  map[string]time.Time // threadID -> last own send; see poll_wake.go
+
+	pollWakeOnce  sync.Once
+	pollWake      chan pollWakeup // see poll_wake.go
+	longPollUp    atomic.Bool     // long-poll notifications are arriving
+	activityUp    atomic.Bool     // recent-conversation checks are working
 	unreadMu      sync.Mutex
 	unreadSeen    map[string]bool
 	unreadSent    map[string]bool
