@@ -384,24 +384,9 @@ func (c *Client) SendAttachmentMessageWithID(ctx context.Context, threadID strin
 }
 
 func (c *Client) sendRichTextMessageWithID(ctx context.Context, threadID string, htmlContent string, filesProperty string, fromUserID string, clientMessageID string, allowEmptyContent bool) (int, error) {
-	if c == nil || c.HTTP == nil {
-		return 0, ErrMissingHTTPClient
-	}
-	if c.Token == "" {
-		return 0, ErrMissingToken
-	}
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
-		return 0, errors.New("missing thread id")
-	}
-	if !allowEmptyContent && strings.TrimSpace(htmlContent) == "" {
-		return 0, errors.New("missing message content")
-	}
-	if strings.TrimSpace(fromUserID) == "" {
-		return 0, errors.New("missing from user id")
-	}
-	if clientMessageID == "" {
-		return 0, errors.New("missing client message id")
+	threadID, err := c.validateSendArgs(threadID, htmlContent, fromUserID, clientMessageID, allowEmptyContent)
+	if err != nil {
+		return 0, err
 	}
 
 	if !strings.Contains(threadID, "@thread.v2") && c.Log != nil {
@@ -410,207 +395,78 @@ func (c *Client) sendRichTextMessageWithID(ctx context.Context, threadID string,
 			Msg("teams thread id missing @thread.v2")
 	}
 
-	baseURL := c.SendMessagesURL
-	if baseURL == "" {
-		baseURL = defaultSendMessagesURL
-	}
-	baseURL = strings.TrimSuffix(baseURL, "/")
-	messagesURL := fmt.Sprintf("%s/%s/messages", baseURL, url.PathEscape(threadID))
-
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	payload := map[string]interface{}{
-		"type":                "Message",
-		"conversationid":      threadID,
-		"content":             htmlContent,
-		"messagetype":         "RichText/Html",
-		"contenttype":         "Text",
-		"clientmessageid":     clientMessageID,
-		"composetime":         now,
-		"originalarrivaltime": now,
-		"from":                fromUserID,
-		"fromUserId":          fromUserID,
-	}
+	var properties any
 	if strings.TrimSpace(filesProperty) != "" {
-		payload["properties"] = map[string]string{
+		properties = map[string]string{
 			"files": filesProperty,
 		}
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return 0, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, messagesURL, bytes.NewReader(body))
-	if err != nil {
-		return 0, err
-	}
-	req.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(body)), nil
-	}
-	req.Header.Set("authentication", "skypetoken="+c.Token)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	c.debugRequest("teams send message request", messagesURL, req)
-
-	executor := c.Executor
-	if executor == nil {
-		executor = &TeamsRequestExecutor{
-			HTTP:        c.HTTP,
-			Log:         zerolog.Nop(),
-			MaxRetries:  4,
-			BaseBackoff: 500 * time.Millisecond,
-			MaxBackoff:  10 * time.Second,
-		}
-		c.Executor = executor
-	}
-	if executor.HTTP == nil {
-		executor.HTTP = c.HTTP
-	}
-	if c.Log != nil {
-		executor.Log = *c.Log
-	}
-
-	ctx = WithRequestMeta(ctx, RequestMeta{
-		ThreadID:        threadID,
-		ClientMessageID: clientMessageID,
-	})
-	resp, err := executor.Do(ctx, req, classifyTeamsSendResponse)
-	if err != nil {
-		statusCode := 0
-		if resp != nil {
-			statusCode = resp.StatusCode
-			if resp.Body != nil {
-				_ = resp.Body.Close()
-			}
-		}
-		return statusCode, err
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode, nil
+	return c.postRichTextMessage(ctx, threadID, htmlContent, fromUserID, clientMessageID, properties, "teams send message request")
 }
 
 func (c *Client) sendRichTextMessageWithMentions(ctx context.Context, threadID string, htmlContent string, fromUserID string, clientMessageID string, mentions []map[string]any) (int, error) {
-	if c == nil || c.HTTP == nil {
-		return 0, ErrMissingHTTPClient
-	}
-	if c.Token == "" {
-		return 0, ErrMissingToken
-	}
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
-		return 0, errors.New("missing thread id")
-	}
-	if strings.TrimSpace(htmlContent) == "" {
-		return 0, errors.New("missing message content")
-	}
-	if strings.TrimSpace(fromUserID) == "" {
-		return 0, errors.New("missing from user id")
-	}
-	if clientMessageID == "" {
-		return 0, errors.New("missing client message id")
-	}
-
-	baseURL := c.SendMessagesURL
-	if baseURL == "" {
-		baseURL = defaultSendMessagesURL
-	}
-	baseURL = strings.TrimSuffix(baseURL, "/")
-	messagesURL := fmt.Sprintf("%s/%s/messages", baseURL, url.PathEscape(threadID))
-
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	payload := map[string]interface{}{
-		"type":                "Message",
-		"conversationid":      threadID,
-		"content":             htmlContent,
-		"messagetype":         "RichText/Html",
-		"contenttype":         "Text",
-		"clientmessageid":     clientMessageID,
-		"composetime":         now,
-		"originalarrivaltime": now,
-		"from":                fromUserID,
-		"fromUserId":          fromUserID,
-		"properties": map[string]interface{}{
-			"mentions": mentions,
-		},
-	}
-	body, err := json.Marshal(payload)
+	threadID, err := c.validateSendArgs(threadID, htmlContent, fromUserID, clientMessageID, false)
 	if err != nil {
 		return 0, err
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, messagesURL, bytes.NewReader(body))
-	if err != nil {
-		return 0, err
+	properties := map[string]interface{}{
+		"mentions": mentions,
 	}
-	req.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(body)), nil
-	}
-	req.Header.Set("authentication", "skypetoken="+c.Token)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-
-	executor := c.Executor
-	if executor == nil {
-		executor = &TeamsRequestExecutor{
-			HTTP:        c.HTTP,
-			Log:         zerolog.Nop(),
-			MaxRetries:  4,
-			BaseBackoff: 500 * time.Millisecond,
-			MaxBackoff:  10 * time.Second,
-		}
-		c.Executor = executor
-	}
-	if executor.HTTP == nil {
-		executor.HTTP = c.HTTP
-	}
-	if c.Log != nil {
-		executor.Log = *c.Log
-	}
-
-	ctx = WithRequestMeta(ctx, RequestMeta{
-		ThreadID:        threadID,
-		ClientMessageID: clientMessageID,
-	})
-	resp, err := executor.Do(ctx, req, classifyTeamsSendResponse)
-	if err != nil {
-		statusCode := 0
-		if resp != nil {
-			statusCode = resp.StatusCode
-			if resp.Body != nil {
-				_ = resp.Body.Close()
-			}
-		}
-		return statusCode, err
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode, nil
+	return c.postRichTextMessage(ctx, threadID, htmlContent, fromUserID, clientMessageID, properties, "")
 }
 
 func (c *Client) sendReplyMessage(ctx context.Context, threadID string, htmlContent string, fromUserID string, clientMessageID string, replyToID string, mentions []map[string]any) (int, error) {
-	if c == nil || c.HTTP == nil {
-		return 0, ErrMissingHTTPClient
-	}
-	if c.Token == "" {
-		return 0, ErrMissingToken
-	}
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
-		return 0, errors.New("missing thread id")
-	}
-	if strings.TrimSpace(htmlContent) == "" {
-		return 0, errors.New("missing message content")
-	}
-	if strings.TrimSpace(fromUserID) == "" {
-		return 0, errors.New("missing from user id")
-	}
-	if clientMessageID == "" {
-		return 0, errors.New("missing client message id")
+	threadID, err := c.validateSendArgs(threadID, htmlContent, fromUserID, clientMessageID, false)
+	if err != nil {
+		return 0, err
 	}
 	replyToID = strings.TrimSpace(replyToID)
 	if replyToID == "" {
 		return 0, errors.New("missing reply-to message id")
 	}
 
+	properties := map[string]interface{}{
+		"replyChainMessageId": replyToID,
+	}
+	if len(mentions) > 0 {
+		properties["mentions"] = mentions
+	}
+	return c.postRichTextMessage(ctx, threadID, htmlContent, fromUserID, clientMessageID, properties, "teams send reply request")
+}
+
+// validateSendArgs checks the client and the arguments every rich-text send
+// needs, in the order the send paths have always checked them, and returns
+// the trimmed thread ID.  allowEmptyContent skips the content check (file
+// attachments may have no text).
+func (c *Client) validateSendArgs(threadID string, htmlContent string, fromUserID string, clientMessageID string, allowEmptyContent bool) (string, error) {
+	if c == nil || c.HTTP == nil {
+		return "", ErrMissingHTTPClient
+	}
+	if c.Token == "" {
+		return "", ErrMissingToken
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return "", errors.New("missing thread id")
+	}
+	if !allowEmptyContent && strings.TrimSpace(htmlContent) == "" {
+		return "", errors.New("missing message content")
+	}
+	if strings.TrimSpace(fromUserID) == "" {
+		return "", errors.New("missing from user id")
+	}
+	if clientMessageID == "" {
+		return "", errors.New("missing client message id")
+	}
+	return threadID, nil
+}
+
+// postRichTextMessage POSTs a RichText/Html message to the thread's messages
+// endpoint through the retrying executor and returns the response status.
+// properties, when non-nil, is sent as the payload's "properties" object;
+// debugMessage, when non-empty, logs the request (token redacted) under that
+// message.  Arguments must already have passed validateSendArgs.
+func (c *Client) postRichTextMessage(ctx context.Context, threadID string, htmlContent string, fromUserID string, clientMessageID string, properties any, debugMessage string) (int, error) {
 	baseURL := c.SendMessagesURL
 	if baseURL == "" {
 		baseURL = defaultSendMessagesURL
@@ -619,12 +475,6 @@ func (c *Client) sendReplyMessage(ctx context.Context, threadID string, htmlCont
 	messagesURL := fmt.Sprintf("%s/%s/messages", baseURL, url.PathEscape(threadID))
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	props := map[string]interface{}{
-		"replyChainMessageId": replyToID,
-	}
-	if len(mentions) > 0 {
-		props["mentions"] = mentions
-	}
 	payload := map[string]interface{}{
 		"type":                "Message",
 		"conversationid":      threadID,
@@ -636,7 +486,9 @@ func (c *Client) sendReplyMessage(ctx context.Context, threadID string, htmlCont
 		"originalarrivaltime": now,
 		"from":                fromUserID,
 		"fromUserId":          fromUserID,
-		"properties":          props,
+	}
+	if properties != nil {
+		payload["properties"] = properties
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -653,7 +505,9 @@ func (c *Client) sendReplyMessage(ctx context.Context, threadID string, htmlCont
 	req.Header.Set("authentication", "skypetoken="+c.Token)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
-	c.debugRequest("teams send reply request", messagesURL, req)
+	if debugMessage != "" {
+		c.debugRequest(debugMessage, messagesURL, req)
+	}
 
 	executor := c.Executor
 	if executor == nil {
