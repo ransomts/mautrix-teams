@@ -1,0 +1,375 @@
+[
+  {
+    "name": "plain",
+    "status": 201,
+    "method": "POST",
+    "uri": "/conversations/19:abc@thread.v2/messages",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authentication": [
+        "skypetoken=token123"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"clientmessageid\":\"111\",\"composetime\":\"\u003cnow\u003e\",\"content\":\"\\u003cp\\u003eHello \\u0026lt;world\\u0026gt;\\u003cbr\\u003eLine\\u003c/p\\u003e\",\"contenttype\":\"Text\",\"conversationid\":\"19:abc@thread.v2\",\"from\":\"8:live:me\",\"fromUserId\":\"8:live:me\",\"messagetype\":\"RichText/Html\",\"originalarrivaltime\":\"\u003cnow\u003e\",\"type\":\"Message\"}",
+    "log": [
+      "{\"level\":\"debug\",\"url\":\"\u003cserver\u003e/conversations/19:abc@thread.v2/messages\",\"headers\":{\"Accept\":[\"application/json\"],\"Authentication\":[\"REDACTED\"],\"Content-Type\":[\"application/json\"]},\"message\":\"teams send message request\"}"
+    ]
+  },
+  {
+    "name": "plain_non_v2_thread",
+    "status": 201,
+    "method": "POST",
+    "uri": "/conversations/48:notes/messages",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authentication": [
+        "skypetoken=token123"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"clientmessageid\":\"112\",\"composetime\":\"\u003cnow\u003e\",\"content\":\"\\u003cp\\u003ehi\\u003c/p\\u003e\",\"contenttype\":\"Text\",\"conversationid\":\"48:notes\",\"from\":\"8:live:me\",\"fromUserId\":\"8:live:me\",\"messagetype\":\"RichText/Html\",\"originalarrivaltime\":\"\u003cnow\u003e\",\"type\":\"Message\"}",
+    "log": [
+      "{\"level\":\"warn\",\"thread_id\":\"48:notes\",\"message\":\"teams thread id missing @thread.v2\"}",
+      "{\"level\":\"debug\",\"url\":\"\u003cserver\u003e/conversations/48:notes/messages\",\"headers\":{\"Accept\":[\"application/json\"],\"Authentication\":[\"REDACTED\"],\"Content-Type\":[\"application/json\"]},\"message\":\"teams send message request\"}"
+    ]
+  },
+  {
+    "name": "gif",
+    "status": 201,
+    "method": "POST",
+    "uri": "/conversations/19:abc@thread.v2/messages",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authentication": [
+        "skypetoken=token123"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"clientmessageid\":\"113\",\"composetime\":\"\u003cnow\u003e\",\"content\":\"\\u003cp\\u003e\\u0026nbsp;\\u003c/p\\u003e\\u003creadonly title=\\\"cat (GIF Image)\\\" itemtype=\\\"http://schema.skype.com/Giphy\\\" contenteditable=\\\"false\\\" aria-label=\\\"cat (GIF Image)\\\"\\u003e\\u003cimg style=\\\"height:auto;margin-top:4px;max-width:100%;\\\" alt=\\\"cat (GIF Image)\\\" height=\\\"250\\\" width=\\\"350\\\" src=\\\"https://media.giphy.com/x.gif\\\" itemtype=\\\"http://schema.skype.com/Giphy\\\"\\u003e\\u003c/readonly\\u003e\\u003cp\\u003e\\u0026nbsp;\\u003c/p\\u003e\",\"contenttype\":\"Text\",\"conversationid\":\"19:abc@thread.v2\",\"from\":\"8:live:me\",\"fromUserId\":\"8:live:me\",\"messagetype\":\"RichText/Html\",\"originalarrivaltime\":\"\u003cnow\u003e\",\"type\":\"Message\"}",
+    "log": [
+      "{\"level\":\"debug\",\"url\":\"\u003cserver\u003e/conversations/19:abc@thread.v2/messages\",\"headers\":{\"Accept\":[\"application/json\"],\"Authentication\":[\"REDACTED\"],\"Content-Type\":[\"application/json\"]},\"message\":\"teams send message request\"}"
+    ]
+  },
+  {
+    "name": "attachment",
+    "status": 201,
+    "method": "POST",
+    "uri": "/conversations/19:abc@thread.v2/messages",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authentication": [
+        "skypetoken=token123"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"clientmessageid\":\"114\",\"composetime\":\"\u003cnow\u003e\",\"content\":\"\",\"contenttype\":\"Text\",\"conversationid\":\"19:abc@thread.v2\",\"from\":\"8:live:me\",\"fromUserId\":\"8:live:me\",\"messagetype\":\"RichText/Html\",\"originalarrivaltime\":\"\u003cnow\u003e\",\"properties\":{\"files\":\"[{\\\"fileName\\\":\\\"a.txt\\\"}]\"},\"type\":\"Message\"}",
+    "log": [
+      "{\"level\":\"debug\",\"url\":\"\u003cserver\u003e/conversations/19:abc@thread.v2/messages\",\"headers\":{\"Accept\":[\"application/json\"],\"Authentication\":[\"REDACTED\"],\"Content-Type\":[\"application/json\"]},\"message\":\"teams send message request\"}"
+    ]
+  },
+  {
+    "name": "attachment_missing_files",
+    "status": 0,
+    "err": "missing files property"
+  },
+  {
+    "name": "formatted_plain",
+    "status": 201,
+    "method": "POST",
+    "uri": "/conversations/19:abc@thread.v2/messages",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authentication": [
+        "skypetoken=token123"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"clientmessageid\":\"116\",\"composetime\":\"\u003cnow\u003e\",\"content\":\"\\u003cp\\u003ehi\\u003c/p\\u003e\",\"contenttype\":\"Text\",\"conversationid\":\"19:abc@thread.v2\",\"from\":\"8:live:me\",\"fromUserId\":\"8:live:me\",\"messagetype\":\"RichText/Html\",\"originalarrivaltime\":\"\u003cnow\u003e\",\"type\":\"Message\"}",
+    "log": [
+      "{\"level\":\"debug\",\"url\":\"\u003cserver\u003e/conversations/19:abc@thread.v2/messages\",\"headers\":{\"Accept\":[\"application/json\"],\"Authentication\":[\"REDACTED\"],\"Content-Type\":[\"application/json\"]},\"message\":\"teams send message request\"}"
+    ]
+  },
+  {
+    "name": "mentions",
+    "status": 201,
+    "method": "POST",
+    "uri": "/conversations/19:abc@thread.v2/messages",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authentication": [
+        "skypetoken=token123"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"clientmessageid\":\"117\",\"composetime\":\"\u003cnow\u003e\",\"content\":\"\\u003cp\\u003ehi Someone\\u003c/p\\u003e\",\"contenttype\":\"Text\",\"conversationid\":\"19:abc@thread.v2\",\"from\":\"8:live:me\",\"fromUserId\":\"8:live:me\",\"messagetype\":\"RichText/Html\",\"originalarrivaltime\":\"\u003cnow\u003e\",\"properties\":{\"mentions\":[{\"@type\":\"http://schema.skype.com/Mention\",\"displayName\":\"Someone\",\"itemid\":\"0\",\"mentionType\":\"person\",\"mri\":\"8:orgid:abc\"}]},\"type\":\"Message\"}"
+  },
+  {
+    "name": "mentions_nil",
+    "status": 201,
+    "method": "POST",
+    "uri": "/conversations/48:notes/messages",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authentication": [
+        "skypetoken=token123"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"clientmessageid\":\"118\",\"composetime\":\"\u003cnow\u003e\",\"content\":\"\\u003cp\\u003ex\\u003c/p\\u003e\",\"contenttype\":\"Text\",\"conversationid\":\"48:notes\",\"from\":\"8:live:me\",\"fromUserId\":\"8:live:me\",\"messagetype\":\"RichText/Html\",\"originalarrivaltime\":\"\u003cnow\u003e\",\"properties\":{\"mentions\":null},\"type\":\"Message\"}"
+  },
+  {
+    "name": "formatted_mentions",
+    "status": 201,
+    "method": "POST",
+    "uri": "/conversations/19:abc@thread.v2/messages",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authentication": [
+        "skypetoken=token123"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"clientmessageid\":\"119\",\"composetime\":\"\u003cnow\u003e\",\"content\":\"\\u003cp\\u003ehi\\u003c/p\\u003e\",\"contenttype\":\"Text\",\"conversationid\":\"19:abc@thread.v2\",\"from\":\"8:live:me\",\"fromUserId\":\"8:live:me\",\"messagetype\":\"RichText/Html\",\"originalarrivaltime\":\"\u003cnow\u003e\",\"properties\":{\"mentions\":[{\"@type\":\"http://schema.skype.com/Mention\",\"displayName\":\"Someone\",\"itemid\":\"0\",\"mentionType\":\"person\",\"mri\":\"8:orgid:abc\"}]},\"type\":\"Message\"}"
+  },
+  {
+    "name": "reply",
+    "status": 201,
+    "method": "POST",
+    "uri": "/conversations/19:abc@thread.v2/messages",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authentication": [
+        "skypetoken=token123"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"clientmessageid\":\"120\",\"composetime\":\"\u003cnow\u003e\",\"content\":\"\\u003cp\\u003ere\\u003c/p\\u003e\",\"contenttype\":\"Text\",\"conversationid\":\"19:abc@thread.v2\",\"from\":\"8:live:me\",\"fromUserId\":\"8:live:me\",\"messagetype\":\"RichText/Html\",\"originalarrivaltime\":\"\u003cnow\u003e\",\"properties\":{\"replyChainMessageId\":\"1700000000000\"},\"type\":\"Message\"}",
+    "log": [
+      "{\"level\":\"debug\",\"url\":\"\u003cserver\u003e/conversations/19:abc@thread.v2/messages\",\"headers\":{\"Accept\":[\"application/json\"],\"Authentication\":[\"REDACTED\"],\"Content-Type\":[\"application/json\"]},\"message\":\"teams send reply request\"}"
+    ]
+  },
+  {
+    "name": "reply_mentions",
+    "status": 201,
+    "method": "POST",
+    "uri": "/conversations/48:notes/messages",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authentication": [
+        "skypetoken=token123"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"clientmessageid\":\"121\",\"composetime\":\"\u003cnow\u003e\",\"content\":\"\\u003cp\\u003ere\\u003c/p\\u003e\",\"contenttype\":\"Text\",\"conversationid\":\"48:notes\",\"from\":\"8:live:me\",\"fromUserId\":\"8:live:me\",\"messagetype\":\"RichText/Html\",\"originalarrivaltime\":\"\u003cnow\u003e\",\"properties\":{\"mentions\":[{\"@type\":\"http://schema.skype.com/Mention\",\"displayName\":\"Someone\",\"itemid\":\"0\",\"mentionType\":\"person\",\"mri\":\"8:orgid:abc\"}],\"replyChainMessageId\":\"1700000000000\"},\"type\":\"Message\"}",
+    "log": [
+      "{\"level\":\"debug\",\"url\":\"\u003cserver\u003e/conversations/48:notes/messages\",\"headers\":{\"Accept\":[\"application/json\"],\"Authentication\":[\"REDACTED\"],\"Content-Type\":[\"application/json\"]},\"message\":\"teams send reply request\"}"
+    ]
+  },
+  {
+    "name": "formatted_reply",
+    "status": 201,
+    "method": "POST",
+    "uri": "/conversations/19:abc@thread.v2/messages",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authentication": [
+        "skypetoken=token123"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"clientmessageid\":\"122\",\"composetime\":\"\u003cnow\u003e\",\"content\":\"\\u003cp\\u003ere\\u003c/p\\u003e\",\"contenttype\":\"Text\",\"conversationid\":\"19:abc@thread.v2\",\"from\":\"8:live:me\",\"fromUserId\":\"8:live:me\",\"messagetype\":\"RichText/Html\",\"originalarrivaltime\":\"\u003cnow\u003e\",\"properties\":{\"mentions\":[{\"@type\":\"http://schema.skype.com/Mention\",\"displayName\":\"Someone\",\"itemid\":\"0\",\"mentionType\":\"person\",\"mri\":\"8:orgid:abc\"}],\"replyChainMessageId\":\"1700000000000\"},\"type\":\"Message\"}",
+    "log": [
+      "{\"level\":\"debug\",\"url\":\"\u003cserver\u003e/conversations/19:abc@thread.v2/messages\",\"headers\":{\"Accept\":[\"application/json\"],\"Authentication\":[\"REDACTED\"],\"Content-Type\":[\"application/json\"]},\"message\":\"teams send reply request\"}"
+    ]
+  },
+  {
+    "name": "reply_missing_reply_to",
+    "status": 0,
+    "err": "missing reply-to message id"
+  },
+  {
+    "name": "reply_all_missing",
+    "status": 0,
+    "err": "missing thread id"
+  },
+  {
+    "name": "reply_missing_content_and_reply_to",
+    "status": 0,
+    "err": "missing message content"
+  },
+  {
+    "name": "reply_missing_client_id_and_reply_to",
+    "status": 0,
+    "err": "missing client message id"
+  },
+  {
+    "name": "plain_missing_content",
+    "status": 0,
+    "err": "missing message content"
+  },
+  {
+    "name": "plain_missing_from",
+    "status": 0,
+    "err": "missing from user id"
+  },
+  {
+    "name": "plain_missing_client_id",
+    "status": 0,
+    "err": "missing client message id"
+  },
+  {
+    "name": "mentions_missing_content",
+    "status": 0,
+    "err": "missing message content"
+  },
+  {
+    "name": "mentions_missing_thread",
+    "status": 0,
+    "err": "missing thread id"
+  },
+  {
+    "name": "missing_token",
+    "status": 0,
+    "err": "consumer client missing skypetoken"
+  },
+  {
+    "name": "server_400",
+    "status": 400,
+    "err": "send message request failed",
+    "method": "POST",
+    "uri": "/conversations//fail400/19:abc@thread.v2/messages",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authentication": [
+        "skypetoken=token123"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"clientmessageid\":\"129\",\"composetime\":\"\u003cnow\u003e\",\"content\":\"\\u003cp\\u003ex\\u003c/p\\u003e\",\"contenttype\":\"Text\",\"conversationid\":\"19:abc@thread.v2\",\"from\":\"8:live:me\",\"fromUserId\":\"8:live:me\",\"messagetype\":\"RichText/Html\",\"originalarrivaltime\":\"\u003cnow\u003e\",\"type\":\"Message\"}",
+    "log": [
+      "{\"level\":\"debug\",\"url\":\"\u003cserver\u003e/conversations//fail400/19:abc@thread.v2/messages\",\"headers\":{\"Accept\":[\"application/json\"],\"Authentication\":[\"REDACTED\"],\"Content-Type\":[\"application/json\"]},\"message\":\"teams send message request\"}",
+      "{\"level\":\"warn\",\"thread_id\":\"19:abc@thread.v2\",\"client_message_id\":\"129\",\"attempts\":1,\"error\":\"send message request failed\",\"message\":\"teams send failed\"}"
+    ]
+  }
+]
