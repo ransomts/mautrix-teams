@@ -168,7 +168,7 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 	}
 	log := c.log()
 	if err := c.ensureValidSkypeToken(ctx); err != nil {
-		c.reportBadCredentials(err)
+		c.reportTokenError(err)
 		return 0, err
 	}
 	log.Trace().Str("thread_id", th.ThreadID).Str("last_seq", th.LastSequenceID).Msg("Polling thread")

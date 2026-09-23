@@ -81,6 +81,20 @@ func (c *TeamsClient) reportBadCredentials(err error) {
 	}
 }
 
+// reportTokenError reports a failed token refresh. A refresh that got no
+// answer is a network problem, not a login one: it counts against
+// reachability and the refresh backoff retries it. Any other failure is an
+// answer, so Teams is reachable again, but the user has to log in again.
+func (c *TeamsClient) reportTokenError(err error) {
+	if c.superseded() {
+		return
+	}
+	c.noteTeamsResult(err)
+	if !isTeamsNetworkError(err) {
+		c.reportBadCredentials(err)
+	}
+}
+
 // clearBadCredentials reports CONNECTED when a failure was outstanding and
 // the tokens are valid again.
 func (c *TeamsClient) clearBadCredentials() {

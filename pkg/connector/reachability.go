@@ -40,11 +40,7 @@ func (r *teamsReach) note(err error) *status.BridgeState {
 			return nil
 		}
 		r.down = true
-		return &status.BridgeState{
-			StateEvent: status.StateTransientDisconnect,
-			Error:      "teams-unreachable",
-			Message:    "Teams is not answering: " + shortNetworkError(err),
-		}
+		return unreachableState(err)
 	}
 	r.failures = 0
 	if !r.down {
@@ -52,6 +48,29 @@ func (r *teamsReach) note(err error) *status.BridgeState {
 	}
 	r.down = false
 	return &status.BridgeState{StateEvent: status.StateConnected}
+}
+
+// markDown records Teams as unreachable at once, without waiting for
+// teamsReachTrip failures, and returns the state to report, or nil when it
+// was already down. For a failure that already means an outage, like no
+// network when the client connects.
+func (r *teamsReach) markDown(err error) *status.BridgeState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failures = max(r.failures, teamsReachTrip)
+	if r.down {
+		return nil
+	}
+	r.down = true
+	return unreachableState(err)
+}
+
+func unreachableState(err error) *status.BridgeState {
+	return &status.BridgeState{
+		StateEvent: status.StateTransientDisconnect,
+		Error:      "teams-unreachable",
+		Message:    "Teams is not answering: " + shortNetworkError(err),
+	}
 }
 
 // noteTeamsResult feeds a request's outcome to the reachability tracker and

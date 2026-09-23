@@ -265,6 +265,9 @@ type refreshFailure struct {
 const (
 	refreshBackoffBase = 30 * time.Second
 	refreshBackoffMax  = 15 * time.Minute
+	// A refresh that got no answer is retried at least this often, so the
+	// bridge picks up within a couple of minutes of the network coming back.
+	refreshNetworkBackoffMax = 2 * time.Minute
 )
 
 // isPermanentRefreshError reports whether the identity provider rejected the
@@ -286,6 +289,9 @@ func (f *refreshFailure) record(now time.Time, err error) {
 	}
 	if delay > refreshBackoffMax || isPermanentRefreshError(err) {
 		delay = refreshBackoffMax
+	}
+	if isTeamsNetworkError(err) && delay > refreshNetworkBackoffMax {
+		delay = refreshNetworkBackoffMax
 	}
 	f.until = now.Add(delay)
 	f.err = err
@@ -371,13 +377,22 @@ func (c *TeamsClient) ensureValidSkypeToken(ctx context.Context) error {
 		}
 		return err
 	}
-	if strings.TrimSpace(state.RefreshToken) != "" {
-		c.Meta.RefreshToken = strings.TrimSpace(state.RefreshToken)
+	refreshRotated := false
+	if newRefresh := strings.TrimSpace(state.RefreshToken); newRefresh != "" {
+		refreshRotated = newRefresh != refresh
+		c.Meta.RefreshToken = newRefresh
 	}
 
 	skResult, err := authClient.AcquireSkypeToken(ctx, state.AccessToken)
 	if err != nil {
 		c.skypeRefreshFail.record(now, err)
+		// The identity provider may already have retired the old refresh
+		// token, so keep the new one even though this refresh failed.
+		if refreshRotated {
+			if saveErr := c.saveLogin(ctx); saveErr != nil {
+				log.Error().Err(saveErr).Msg("Failed to persist rotated refresh token")
+			}
+		}
 		return err
 	}
 	c.skypeRefreshFail.reset()

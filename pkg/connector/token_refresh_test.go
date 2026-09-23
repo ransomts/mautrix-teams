@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -225,5 +226,52 @@ func TestEnsureValidGraphTokenDeviceCodeLoginUsesGraphScope(t *testing.T) {
 	}
 	if c.Meta.GraphAccessToken != "graph-access" || c.Meta.GraphExpiresAt == 0 {
 		t.Fatalf("graph token not stored: %+v", c.Meta)
+	}
+}
+
+func TestRefreshFailureBackoffCapsNetworkErrors(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	var f refreshFailure
+	netErr := &url.Error{Op: "Post", URL: "https://login.example.invalid/token", Err: reachTimeout{}}
+	for i := 0; i < 10; i++ {
+		f.record(now, netErr)
+	}
+	if got := f.until.Sub(now); got != refreshNetworkBackoffMax {
+		t.Fatalf("network failures should retry within %v, got %v", refreshNetworkBackoffMax, got)
+	}
+}
+
+func TestEnsureValidSkypeTokenKeepsRotatedRefreshTokenOnSkypeFailure(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"access_token":"mbi-access","refresh_token":"rotated","expires_in":3600}`))
+	}))
+	defer tokenServer.Close()
+	skypeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer skypeServer.Close()
+
+	origFactory := newAuthClient
+	newAuthClient = func(store *auth.CookieStore) *auth.Client {
+		client := auth.NewClient(store)
+		client.TokenEndpoint = tokenServer.URL
+		client.SkypeTokenEndpoint = skypeServer.URL
+		return client
+	}
+	defer func() { newAuthClient = origFactory }()
+
+	c := &TeamsClient{
+		Login: &bridgev2.UserLogin{UserLogin: &database.UserLogin{}},
+		Meta: &teamsid.UserLoginMetadata{
+			RefreshToken:        "old-refresh",
+			SkypeToken:          "stale-skype",
+			SkypeTokenExpiresAt: time.Now().Add(-time.Hour).Unix(),
+		},
+	}
+	if err := c.ensureValidSkypeToken(context.Background()); err == nil {
+		t.Fatal("expected the skypetoken step to fail")
+	}
+	if c.Meta.RefreshToken != "rotated" {
+		t.Fatalf("the rotated refresh token must survive a failed skypetoken step, got %q", c.Meta.RefreshToken)
 	}
 }

@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"testing"
 
@@ -64,5 +65,36 @@ func TestTeamsReach_IgnoresCancellation(t *testing.T) {
 	}
 	if state := r.note(context.DeadlineExceeded); state != nil {
 		t.Fatal("one deadline is below the trip point")
+	}
+}
+
+func TestTeamsReach_MarkDownReportsAtOnce(t *testing.T) {
+	var r teamsReach
+	netErr := &url.Error{Op: "Post", URL: "https://login.example.invalid/token", Err: reachTimeout{}}
+	state := r.markDown(netErr)
+	if state == nil || state.StateEvent != status.StateTransientDisconnect {
+		t.Fatalf("expected TRANSIENT_DISCONNECT on the first failure, got %v", state)
+	}
+	if again := r.markDown(netErr); again != nil {
+		t.Errorf("already down, must not report again, got %v", again.StateEvent)
+	}
+	if again := r.note(netErr); again != nil {
+		t.Errorf("a further failure while down must not report, got %v", again.StateEvent)
+	}
+	if state := r.note(nil); state == nil || state.StateEvent != status.StateConnected {
+		t.Fatalf("expected CONNECTED once a request gets through, got %v", state)
+	}
+}
+
+func TestReportTokenErrorSeparatesNetworkFromLogin(t *testing.T) {
+	c := &TeamsClient{}
+	netErr := &url.Error{Op: "Post", URL: "https://login.example.invalid/token", Err: reachTimeout{}}
+	c.reportTokenError(fmt.Errorf("%w (refresh suppressed until 2026-09-23T20:00:00Z)", netErr))
+	if c.reach.failures != 1 {
+		t.Fatalf("a refresh that got no answer should count against reachability, failures=%d", c.reach.failures)
+	}
+	c.reportTokenError(errors.New(`token endpoint returned non-2xx status: 400 body={"error":"invalid_grant"}`))
+	if c.reach.failures != 0 {
+		t.Fatalf("an answer from the identity provider means it is reachable, failures=%d", c.reach.failures)
 	}
 }

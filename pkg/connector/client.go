@@ -129,11 +129,23 @@ func (c *TeamsClient) Connect(ctx context.Context) {
 	log.Info().Msg("Connecting to Teams")
 	c.Login.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnecting})
 
+	reachable := true
 	if err := c.ensureValidSkypeToken(ctx); err != nil {
-		c.loggedIn.Store(false)
-		log.Error().Err(err).Msg("Failed to ensure valid Teams tokens")
-		c.reportBadCredentials(err)
-		return
+		if !isTeamsNetworkError(err) {
+			c.loggedIn.Store(false)
+			log.Error().Err(err).Msg("Failed to ensure valid Teams tokens")
+			c.reportBadCredentials(err)
+			return
+		}
+		// The refresh never got an answer: no network yet (boot, resume from
+		// suspend) or the route just changed. The login itself is fine, so
+		// start the loops anyway. Their refreshes back off and retry, and
+		// CONNECTED follows the first request that gets through.
+		reachable = false
+		log.Warn().Err(err).Msg("Teams unreachable while connecting, will keep retrying")
+		if state := c.reach.markDown(err); state != nil {
+			c.Login.BridgeState.Send(*state)
+		}
 	}
 
 	c.loggedIn.Store(true)
@@ -141,8 +153,10 @@ func (c *TeamsClient) Connect(ctx context.Context) {
 	c.api = c.newConsumer()
 	c.events = &loginEventSink{login: c.Login}
 	c.apiMu.Unlock()
-	log.Info().Str("teams_user_id", c.Meta.TeamsUserID).Msg("Connected to Teams")
-	c.Login.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
+	if reachable {
+		log.Info().Str("teams_user_id", c.Meta.TeamsUserID).Msg("Connected to Teams")
+		c.Login.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
+	}
 	// Ghosts named before their profile was known keep the raw Teams ID
 	// until something renames them; do that before events start flowing.
 	c.syncGhostNamesFromProfiles(ctx)

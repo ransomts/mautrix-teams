@@ -27,7 +27,7 @@ func (c *TeamsClient) refreshThreads(ctx context.Context) error {
 	}
 	log := c.log()
 	if err := c.ensureValidSkypeToken(ctx); err != nil {
-		c.reportBadCredentials(err)
+		c.reportTokenError(err)
 		return err
 	}
 
