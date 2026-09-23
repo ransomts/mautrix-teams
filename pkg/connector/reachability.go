@@ -50,6 +50,13 @@ func (r *teamsReach) note(err error) *status.BridgeState {
 	return &status.BridgeState{StateEvent: status.StateConnected}
 }
 
+// isDown reports whether Teams is currently counted unreachable.
+func (r *teamsReach) isDown() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.down
+}
+
 // markDown records Teams as unreachable at once, without waiting for
 // teamsReachTrip failures, and returns the state to report, or nil when it
 // was already down. For a failure that already means an outage, like no

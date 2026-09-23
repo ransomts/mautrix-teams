@@ -112,7 +112,7 @@ func TestCheckActivityWakesChangedThreads(t *testing.T) {
 
 func TestIdleCapRisesWhileLongPollIsUp(t *testing.T) {
 	b := PollBackoff{Delay: pollIdleCap, IdleCap: pollBackstopIdleCap}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < int(pollBackstopIdleCap/pollBaseDelay)+1; i++ {
 		b.OnIdle()
 	}
 	if b.Delay != pollBackstopIdleCap {

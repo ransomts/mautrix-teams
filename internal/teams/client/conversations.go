@@ -101,6 +101,14 @@ func (c *Client) listConversations(ctx context.Context, token string, pageSize i
 	defer resp.Body.Close()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		if resp.StatusCode == http.StatusTooManyRequests {
+			// Same shape as the message endpoints, so the poll loop can
+			// pause everything on a rate limit from either.
+			return nil, RetryableError{
+				Status:     resp.StatusCode,
+				RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
+			}
+		}
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 		return nil, ConversationsError{
 			Status:      resp.StatusCode,

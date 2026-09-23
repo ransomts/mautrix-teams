@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestListConversationsSuccess(t *testing.T) {
@@ -57,5 +58,21 @@ func TestListConversationsNon2xx(t *testing.T) {
 	}
 	if len(convErr.BodySnippet) != maxErrorBodyBytes {
 		t.Fatalf("unexpected body snippet length: %d", len(convErr.BodySnippet))
+	}
+}
+
+func TestListConversations429IsRetryable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "12")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	client.ConversationsURL = server.URL
+	_, err := client.ListConversations(context.Background(), "token123")
+	var retryable RetryableError
+	if !errors.As(err, &retryable) || retryable.Status != http.StatusTooManyRequests || retryable.RetryAfter != 12*time.Second {
+		t.Fatalf("expected a 429 RetryableError with Retry-After 12s, got %#v", err)
 	}
 }

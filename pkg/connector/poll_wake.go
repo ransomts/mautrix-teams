@@ -20,8 +20,10 @@ import (
 
 const (
 	// pollBackstopIdleCap is the idle poll cap while changes are being
-	// watched: polling then only catches what the watch missed.
-	pollBackstopIdleCap = 2 * time.Minute
+	// watched: polling then only catches what the watch missed, such as a
+	// reaction or edit on an older message in a quiet chat. At a few hundred
+	// threads it is most of the bridge's request load.
+	pollBackstopIdleCap = 15 * time.Minute
 	// activeThreadIdleCap is the idle poll cap of a thread with a recent own
 	// send, whose read positions are checked on every poll.
 	activeThreadIdleCap = 5 * time.Second
@@ -102,16 +104,18 @@ func (c *TeamsClient) idleCapFor(threadID string, now time.Time) time.Duration {
 // checkActivity lists the most recently active conversations and wakes each
 // thread whose newest message changed since the previous check. lastSeen
 // maps conversation ID to newest message ID between calls; the first call
-// only fills it.
-func (c *TeamsClient) checkActivity(ctx context.Context, states map[string]*pollState, lastSeen map[string]string) {
+// only fills it. unknown reports a changed conversation that matches no
+// polled thread, i.e. a chat that discovery has not picked up yet.
+func (c *TeamsClient) checkActivity(ctx context.Context, states map[string]*pollState, lastSeen map[string]string) (unknown bool, err error) {
 	convs, err := c.getAPI().ListRecentConversations(ctx, c.skypeToken(), activityPageSize)
+	c.noteTeamsResult(err)
 	if err != nil {
 		log := c.log()
 		if c.activityUp.Swap(false) {
 			log.Info().Bool("watching", false).Msg("Recent-conversations change watch state changed")
 		}
 		log.Debug().Err(err).Msg("Recent conversations check failed")
-		return
+		return false, err
 	}
 	primed := len(lastSeen) > 0
 	watched := false
@@ -122,7 +126,9 @@ func (c *TeamsClient) checkActivity(ctx context.Context, states map[string]*poll
 		}
 		watched = true
 		if prev, ok := lastSeen[conv.ID]; prev != newest && (ok || primed) {
-			c.applyWakeup(pollWakeup{threadID: conv.ID}, states)
+			if !c.applyWakeup(pollWakeup{threadID: conv.ID}, states) && !isNonPollableSystemStream(conv.ID) {
+				unknown = true
+			}
 		}
 		lastSeen[conv.ID] = newest
 	}
@@ -133,6 +139,7 @@ func (c *TeamsClient) checkActivity(ctx context.Context, states map[string]*poll
 		log.Info().Bool("watching", watched).Int("conversations", len(convs)).
 			Msg("Recent-conversations change watch state changed")
 	}
+	return unknown, nil
 }
 
 // applyWakeup makes the threads matching w due now, at the fastest cadence.

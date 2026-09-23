@@ -20,6 +20,7 @@ type pollState struct {
 	backoff      PollBackoff
 	nextPoll     time.Time
 	conversation string // the thread's conversation ID, for matching wakeups
+	gone         bool   // Teams reported the thread deleted; polled rarely
 }
 
 const (
@@ -51,7 +52,6 @@ func (c *TeamsClient) pollDueThreads(ctx context.Context, initialDiscoverySuccee
 	if c == nil || c.Main == nil || c.Main.DB == nil || c.Login == nil {
 		return nil
 	}
-	log := zerolog.Ctx(ctx)
 	threads, err := c.Main.DB.ThreadState.ListForLogin(ctx, c.Login.ID)
 	if err != nil {
 		return err
@@ -65,12 +65,10 @@ func (c *TeamsClient) pollDueThreads(ctx context.Context, initialDiscoverySuccee
 		states[th.ThreadID] = &pollState{backoff: PollBackoff{Delay: pollBaseDelay}, nextPoll: time.Now().UTC()}
 	}
 
-	nextDiscovery := time.Now().UTC().Add(threadDiscoveryInterval)
-	if !initialDiscoverySucceeded {
-		nextDiscovery = time.Time{}
+	sched := &pollSchedule{lastSeen: make(map[string]string)}
+	if initialDiscoverySucceeded {
+		sched.nextDiscovery = time.Now().UTC().Add(c.discoveryInterval())
 	}
-	var nextActivity time.Time
-	lastSeen := make(map[string]string)
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -79,53 +77,10 @@ func (c *TeamsClient) pollDueThreads(ctx context.Context, initialDiscoverySuccee
 			return errClientSuperseded
 		}
 		now := time.Now().UTC()
-		if nextDiscovery.IsZero() || !now.Before(nextDiscovery) {
-			if err := c.refreshThreads(ctx); err != nil {
-				log.Err(err).Msg("Teams thread discovery refresh failed")
-			}
-			nextDiscovery = now.Add(threadDiscoveryInterval)
-		}
-		if !now.Before(nextActivity) {
-			c.checkActivity(ctx, states, lastSeen)
-			nextActivity = now.Add(activityCheckInterval)
-		}
-		nextWake := now.Add(pollLoopMaxSleep)
-		if nextActivity.Before(nextWake) {
-			nextWake = nextActivity
-		}
-
-		threads, err := c.Main.DB.ThreadState.ListForLogin(ctx, c.Login.ID)
-		if err != nil {
-			return err
-		}
-		for _, th := range threads {
-			if th == nil || th.ThreadID == "" {
-				continue
-			}
-			ps := states[th.ThreadID]
-			if ps == nil {
-				ps = &pollState{backoff: PollBackoff{Delay: pollBaseDelay}, nextPoll: now}
-				states[th.ThreadID] = ps
-			}
-			ps.conversation = th.Conversation
-			if now.Before(ps.nextPoll) {
-				if ps.nextPoll.Before(nextWake) {
-					nextWake = ps.nextPoll
-				}
-				continue
-			}
-
-			ingested, err := c.pollThread(ctx, th, now)
-			ps.backoff.IdleCap = c.idleCapFor(th.ThreadID, now)
-			delay, reason := ApplyPollBackoff(&ps.backoff, ingested, err)
-			if reason == PollBackoffIdle && ps.backoff.IdleCap == pollBackstopIdleCap {
-				// Changes are watched: an idle thread needs no gradual ramp.
-				ps.backoff.Delay = pollBackstopIdleCap
-				delay = pollBackstopIdleCap
-			}
-			ps.nextPoll = now.Add(delay)
-			if ps.nextPoll.Before(nextWake) {
-				nextWake = ps.nextPoll
+		nextWake := sched.throttledUntil
+		if !now.Before(sched.throttledUntil) {
+			if nextWake, err = c.pollPass(ctx, now, states, sched); err != nil {
+				return err
 			}
 		}
 
@@ -155,6 +110,136 @@ func (c *TeamsClient) pollDueThreads(ctx context.Context, initialDiscoverySuccee
 	}
 }
 
+// pollSchedule is the poll loop's timing state between passes.
+type pollSchedule struct {
+	nextDiscovery, lastDiscovery time.Time
+	nextActivity                 time.Time
+	activityFailures             int
+	// throttledUntil pauses all polling after Teams answers 429.
+	throttledUntil time.Time
+	// lastSeen maps conversation ID to its newest message ID, for the
+	// recent-conversations check.
+	lastSeen map[string]string
+}
+
+// throttle pauses all polling if err is a 429 and reports whether it was.
+func (s *pollSchedule) throttle(ctx context.Context, err error, now time.Time) bool {
+	d, ok := teamsThrottle(err)
+	if !ok {
+		return false
+	}
+	if until := now.Add(d); until.After(s.throttledUntil) {
+		s.throttledUntil = until
+		zerolog.Ctx(ctx).Warn().Dur("pause", d).Msg("Teams is rate-limiting the bridge, pausing polling")
+	}
+	return true
+}
+
+// pollPass runs whatever is due at now: discovery, the recent-conversations
+// check, and every thread whose next poll has come. It returns when the loop
+// should wake next.
+func (c *TeamsClient) pollPass(ctx context.Context, now time.Time, states map[string]*pollState, sched *pollSchedule) (time.Time, error) {
+	log := zerolog.Ctx(ctx)
+	if sched.nextDiscovery.IsZero() || !now.Before(sched.nextDiscovery) {
+		if err := c.refreshThreads(ctx); err != nil && !sched.throttle(ctx, err, now) {
+			log.Err(err).Msg("Teams thread discovery refresh failed")
+		}
+		sched.lastDiscovery = now
+		sched.nextDiscovery = now.Add(c.discoveryInterval())
+	}
+	if !now.Before(sched.nextActivity) {
+		c.runActivityCheck(ctx, now, states, sched)
+	}
+	if now.Before(sched.throttledUntil) {
+		return sched.throttledUntil, nil
+	}
+	// Both are always set by now; one already due (discovery pulled forward
+	// for a new chat) makes the next pass come at once.
+	nextWake := now.Add(pollLoopMaxSleep)
+	for _, t := range []time.Time{sched.nextActivity, sched.nextDiscovery} {
+		if t.Before(nextWake) {
+			nextWake = t
+		}
+	}
+
+	threads, err := c.Main.DB.ThreadState.ListForLogin(ctx, c.Login.ID)
+	if err != nil {
+		return nextWake, err
+	}
+	for _, th := range threads {
+		if th == nil || th.ThreadID == "" {
+			continue
+		}
+		ps := states[th.ThreadID]
+		if ps == nil {
+			ps = &pollState{backoff: PollBackoff{Delay: pollBaseDelay}, nextPoll: now}
+			states[th.ThreadID] = ps
+		}
+		ps.conversation = th.Conversation
+		if now.Before(ps.nextPoll) {
+			if ps.nextPoll.Before(nextWake) {
+				nextWake = ps.nextPoll
+			}
+			continue
+		}
+
+		ingested, err := c.pollThread(ctx, th, now)
+		if sched.throttle(ctx, err, now) {
+			// Leave this thread and the rest due; they go first once the
+			// pause is over.
+			return sched.throttledUntil, nil
+		}
+		if isThreadGone(err) {
+			if !ps.gone {
+				ps.gone = true
+				log.Info().Str("thread_id", th.ThreadID).Dur("recheck", goneThreadRecheck).
+					Msg("Teams reports the thread deleted, polling it rarely")
+			}
+			ps.nextPoll = now.Add(goneThreadRecheck)
+			continue
+		}
+		ps.gone = false
+		ps.backoff.IdleCap = c.idleCapFor(th.ThreadID, now)
+		delay, reason := ApplyPollBackoff(&ps.backoff, ingested, err)
+		if reason == PollBackoffIdle && ps.backoff.IdleCap == pollBackstopIdleCap {
+			// Changes are watched: an idle thread needs no gradual ramp.
+			ps.backoff.Delay = pollBackstopIdleCap
+			delay = pollBackstopIdleCap
+		}
+		ps.nextPoll = now.Add(delay)
+		if ps.nextPoll.Before(nextWake) {
+			nextWake = ps.nextPoll
+		}
+	}
+	return nextWake, nil
+}
+
+// runActivityCheck runs the recent-conversations check with a fresh token,
+// spacing it out while it fails, and schedules discovery when it sees a
+// conversation the poller does not know.
+func (c *TeamsClient) runActivityCheck(ctx context.Context, now time.Time, states map[string]*pollState, sched *pollSchedule) {
+	err := c.ensureValidSkypeToken(ctx)
+	if err != nil {
+		c.reportTokenError(err)
+	} else {
+		var unknown bool
+		unknown, err = c.checkActivity(ctx, states, sched.lastSeen)
+		// A new chat: find it now rather than at the next scheduled
+		// discovery, but not more than once per gap, so a conversation
+		// discovery never adds cannot make it run on every check.
+		if unknown && now.Sub(sched.lastDiscovery) >= discoveryMinGap {
+			sched.nextDiscovery = now
+		}
+	}
+	if err != nil {
+		sched.throttle(ctx, err, now)
+		sched.activityFailures++
+	} else {
+		sched.activityFailures = 0
+	}
+	sched.nextActivity = now.Add(activityRetryDelay(sched.activityFailures))
+}
+
 func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, now time.Time) (int, error) {
 	if c == nil || th == nil {
 		return 0, nil
@@ -175,7 +260,13 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 	msgs, err := c.getAPI().ListMessages(ctx, th.Conversation, th.LastSequenceID)
 	c.noteTeamsResult(err)
 	if err != nil {
-		log.Warn().Err(err).Str("thread_id", th.ThreadID).Msg("Failed to poll thread")
+		// A deleted thread fails every time, and during an outage every
+		// thread does; the poll loop and the bridge state already say so.
+		lvl := zerolog.WarnLevel
+		if isThreadGone(err) || c.reach.isDown() {
+			lvl = zerolog.DebugLevel
+		}
+		log.WithLevel(lvl).Err(err).Str("thread_id", th.ThreadID).Msg("Failed to poll thread")
 		return 0, err
 	}
 
