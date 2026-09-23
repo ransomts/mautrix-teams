@@ -256,6 +256,17 @@ func (c *TeamsClient) runActivityCheck(ctx context.Context, now time.Time, state
 	sched.nextActivity = now.Add(activityRetryDelay(sched.activityFailures))
 }
 
+// pollFailureLevel is the level to log a failed thread poll at.  A deleted
+// thread fails every time, and during an outage every thread does; the poll
+// loop and the bridge state already say so.  A poll cut short because the
+// client is stopping (a re-login replaced it, or shutdown) is no failure.
+func (c *TeamsClient) pollFailureLevel(ctx context.Context, err error) zerolog.Level {
+	if loopStopped(err) || ctx.Err() != nil || isThreadGone(err) || c.reach.isDown() {
+		return zerolog.DebugLevel
+	}
+	return zerolog.WarnLevel
+}
+
 func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, now time.Time) (int, error) {
 	if c == nil || th == nil {
 		return 0, nil
@@ -281,13 +292,7 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 	msgs, err := c.getAPI().ListMessages(ctx, th.Conversation, th.LastSequenceID)
 	c.noteTeamsResult(err)
 	if err != nil {
-		// A deleted thread fails every time, and during an outage every
-		// thread does; the poll loop and the bridge state already say so.
-		lvl := zerolog.WarnLevel
-		if isThreadGone(err) || c.reach.isDown() {
-			lvl = zerolog.DebugLevel
-		}
-		log.WithLevel(lvl).Err(err).Str("thread_id", th.ThreadID).Msg("Failed to poll thread")
+		log.WithLevel(c.pollFailureLevel(ctx, err)).Err(err).Str("thread_id", th.ThreadID).Msg("Failed to poll thread")
 		return 0, err
 	}
 
