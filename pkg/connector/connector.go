@@ -7,6 +7,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"maunium.net/go/mautrix/bridgev2"
+	"maunium.net/go/mautrix/bridgev2/commands"
 
 	"go.mau.fi/mautrix-teams/pkg/teamsdb"
 	"go.mau.fi/mautrix-teams/pkg/teamsid"
@@ -34,6 +35,10 @@ func (t *TeamsConnector) GetName() bridgev2.BridgeName {
 
 func (t *TeamsConnector) Init(br *bridgev2.Bridge) {
 	t.Bridge = br
+	if proc, ok := br.Commands.(*commands.Processor); ok {
+		proc.AddHandler(commandRepairSystemMessages)
+		proc.AddHandler(commandRepairBlankMessages)
+	}
 	if br != nil && br.DB != nil && br.DB.Database != nil {
 		t.DB = teamsdb.New(br.ID, br.DB.Database, br.Log.With().Str("db_section", "teams").Logger())
 	}

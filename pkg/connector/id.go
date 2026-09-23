@@ -36,8 +36,9 @@ func isLikelyThreadID(value string) bool {
 
 // isSystemMessageType reports whether a Teams message type is a
 // conversation-control message with no user content: ThreadActivity/*
-// (membership, topic and picture changes, which the bridge learns from chat
-// info instead) and the typing/live-state controls.
+// (membership, role, topic and picture changes; the ones worth reading are
+// rendered as notices, see system_messages.go) and the typing/live-state
+// controls.
 func isSystemMessageType(messageType string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(messageType))
 	return strings.HasPrefix(normalized, "threadactivity/") || strings.HasPrefix(normalized, "control/")

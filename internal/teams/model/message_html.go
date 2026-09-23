@@ -26,6 +26,12 @@ var allowedFormattedTags = map[string]bool{
 	"pre":        true,
 	"s":          true,
 	"strong":     true,
+	"table":      true,
+	"tbody":      true,
+	"td":         true,
+	"th":         true,
+	"thead":      true,
+	"tr":         true,
 	"u":          true,
 	"ul":         true,
 }

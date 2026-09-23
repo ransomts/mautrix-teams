@@ -53,6 +53,8 @@ type TeamsClient struct {
 	syncCancel context.CancelFunc
 	syncDone   chan struct{}
 
+	reach teamsReach // whether Teams is answering; see reachability.go
+
 	reactionSeenMu sync.Mutex
 	reactionSeen   map[string]struct{}
 	reactionSigs   map[string]string // messageID -> last announced reaction signature
@@ -268,6 +270,14 @@ func (c *TeamsClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost) (*
 		return nil, bridgev2.ErrNotLoggedIn
 	}
 	info := &bridgev2.UserInfo{}
+	if string(ghost.ID) == systemSenderID {
+		// The sender of system notices is the bridge's own, not a person.
+		name := systemSenderName
+		isBot := true
+		info.Name = &name
+		info.IsBot = &isBot
+		return info, nil
+	}
 	// Profile table first, then Graph; a ghost first seen through a reaction
 	// or a meeting has no message to learn its name from.
 	if name, _ := c.lookupUserDisplayName(ctx, string(ghost.ID)); name != "" {
@@ -398,15 +408,20 @@ func (c *TeamsClient) FetchMessages(ctx context.Context, params bridgev2.FetchMe
 			continue
 		}
 		senderID := model.NormalizeTeamsUserID(msg.SenderID)
-		if senderID == "" || isLikelyThreadID(senderID) || isSystemMessageType(msg.MessageType) {
-			continue
+		system := senderID == "" || isLikelyThreadID(senderID) || isSystemMessageType(msg.MessageType)
+		if system {
+			if _, ok := parseSystemMessage(msg.MessageType, msg.RawContent); !ok {
+				continue
+			}
 		}
 		if strings.Contains(msg.MessageType, "MessageDelete") {
 			continue
 		}
 
 		es := bridgev2.EventSender{Sender: teamsUserIDToNetworkUserID(senderID)}
-		if selfID != "" && senderID == selfID {
+		if system {
+			es = systemEventSender()
+		} else if selfID != "" && senderID == selfID {
 			es.IsFromMe = true
 			es.SenderLogin = c.Login.ID
 		}
@@ -416,7 +431,11 @@ func (c *TeamsClient) FetchMessages(ctx context.Context, params bridgev2.FetchMe
 		if c.Main != nil && c.Main.Bridge != nil {
 			intent = c.Main.Bridge.Bot
 		}
-		converted, convErr := c.convertTeamsMessage(ctx, params.Portal, intent, msg)
+		convert := c.convertTeamsMessage
+		if system {
+			convert = c.convertSystemMessage
+		}
+		converted, convErr := convert(ctx, params.Portal, intent, msg)
 		if convErr != nil || converted == nil {
 			log.Debug().Str("message_id", msg.MessageID).Str("message_type", msg.MessageType).Err(convErr).Msg("Skipping unconvertible backfill message")
 			continue

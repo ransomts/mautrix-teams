@@ -18,6 +18,7 @@ type RemoteMessage struct {
 	Timestamp        time.Time
 	Body             string
 	FormattedBody    string
+	RawContent       string // the content field as Teams sent it, for system messages (XML or JSON)
 	GIFs             []TeamsGIF
 	InlineImages     []TeamsInlineImage
 	PropertiesFiles  string

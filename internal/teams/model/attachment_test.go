@@ -105,3 +105,36 @@ func TestExtractFilesProperty(t *testing.T) {
 		t.Fatalf("unexpected parse result: ok=%v attachments=%#v", ok, attachments)
 	}
 }
+
+func TestParseAttachmentsObjectURLOnly(t *testing.T) {
+	raw := `[{"itemid":"eec34aef","fileName":"dKVI7ZJ.jpeg","fileType":"jpeg","fileInfo":{"itemId":null,"fileUrl":"https://example.sharepoint.com/teams/x/Shared Documents/memes/dKVI7ZJ.jpeg","shareUrl":null},"objectUrl":"https://example.sharepoint.com/teams/x/Shared Documents/memes/dKVI7ZJ.jpeg"}]`
+	attachments, ok := ParseAttachments(raw)
+	if !ok || len(attachments) != 1 {
+		t.Fatalf("expected one attachment, got ok=%v %#v", ok, attachments)
+	}
+	if attachments[0].ShareURL != "https://example.sharepoint.com/teams/x/Shared Documents/memes/dKVI7ZJ.jpeg" {
+		t.Errorf("ShareURL = %q", attachments[0].ShareURL)
+	}
+	if attachments[0].DriveItemID != "" {
+		t.Errorf("DriveItemID = %q, want empty", attachments[0].DriveItemID)
+	}
+}
+
+func TestIsDeleted(t *testing.T) {
+	if !IsDeleted([]byte(`{"deletetime":"1771359230016","hardDeleteTime":"1771359230016","hardDeleteReason":"ThreadServiceDeleteMessage"}`)) {
+		t.Error("deleted message not detected")
+	}
+	if IsDeleted([]byte(`{"mentions":"[]","files":"[]"}`)) || IsDeleted(nil) {
+		t.Error("live message reported deleted")
+	}
+}
+
+func TestExtractSafeLinks(t *testing.T) {
+	links := ExtractSafeLinks([]byte(`{"files":"[]","atp":"[{\"URL\":\"https://example.sharepoint.com/personal/x/Documents/scan.pdf\",\"Xsdata\":\"…\"}]"}`))
+	if len(links) != 1 || links[0] != "https://example.sharepoint.com/personal/x/Documents/scan.pdf" {
+		t.Errorf("links = %#v", links)
+	}
+	if ExtractSafeLinks([]byte(`{"files":"[]"}`)) != nil {
+		t.Error("expected no links")
+	}
+}

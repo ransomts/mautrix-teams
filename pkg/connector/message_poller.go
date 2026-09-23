@@ -144,6 +144,7 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 	}
 	log.Trace().Str("thread_id", th.ThreadID).Str("last_seq", th.LastSequenceID).Msg("Polling thread")
 	msgs, err := c.getAPI().ListMessages(ctx, th.Conversation, th.LastSequenceID)
+	c.noteTeamsResult(err)
 	if err != nil {
 		log.Warn().Err(err).Str("thread_id", th.ThreadID).Msg("Failed to poll thread")
 		return 0, err
@@ -215,6 +216,13 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 		senderID := model.NormalizeTeamsUserID(msg.SenderID)
 		if senderID == "" || strings.EqualFold(senderID, strings.TrimSpace(th.ThreadID)) || isLikelyThreadID(senderID) ||
 			isSystemMessageType(msg.MessageType) {
+			// Teams' own record of a membership, role or name change is
+			// worth a line; its other bookkeeping is not.
+			if evt := c.systemMessageEvent(th, msg); evt != nil {
+				c.queueRemoteEvent(evt)
+				ingested++
+				continue
+			}
 			zerolog.Ctx(ctx).Debug().
 				Str("thread_id", th.ThreadID).
 				Str("message_id", msg.MessageID).

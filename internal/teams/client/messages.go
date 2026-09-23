@@ -206,6 +206,7 @@ func (c *Client) convertRemoteMessage(msg remoteMessage, seen map[string]struct{
 		Timestamp:        model.ParseTimestamp(msg.OriginalArrivalTime),
 		Body:             content.Body,
 		FormattedBody:    content.FormattedBody,
+		RawContent:       bodyRaw,
 		GIFs:             content.GIFs,
 		InlineImages:     content.InlineImages,
 		PropertiesFiles:  model.ExtractFilesProperty(msg.Properties),

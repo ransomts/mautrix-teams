@@ -33,6 +33,7 @@ func (c *TeamsClient) refreshThreads(ctx context.Context) error {
 
 	log.Debug().Msg("Refreshing thread list from Teams API")
 	convs, err := c.getAPI().ListConversations(ctx, c.skypeToken())
+	c.noteTeamsResult(err)
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to list conversations")
 		return err

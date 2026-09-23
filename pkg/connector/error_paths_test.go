@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"errors"
+	"net/url"
 	"testing"
 	"time"
 
@@ -399,16 +400,58 @@ func TestPollThread_NilThreadState(t *testing.T) {
 // wrapTeamsSendError
 // ---------------------------------------------------------------------------
 
-func TestWrapTeamsSendError_GenericPassthrough(t *testing.T) {
+func TestWrapTeamsSendError_GenericSendsNotice(t *testing.T) {
 	err := errors.New("something failed")
 	result := wrapTeamsSendError(err)
 	if result == nil {
 		t.Fatal("expected non-nil error")
 	}
 	if result.Error() != err.Error() {
-		t.Errorf("expected passthrough, got %q vs %q", result.Error(), err.Error())
+		t.Errorf("expected the original error text, got %q vs %q", result.Error(), err.Error())
+	}
+	if !errors.Is(result, err) {
+		t.Error("expected the wrapped error to unwrap to the original")
+	}
+	var status bridgev2.MessageStatus
+	if !errors.As(result, &status) {
+		t.Fatal("expected a MessageStatus")
+	}
+	if !status.SendNotice {
+		t.Error("expected SendNotice so a plain Matrix client sees the failure")
+	}
+	if !status.ErrorAsMessage {
+		t.Error("expected the error text to be used as the notice")
 	}
 }
+
+func TestWrapTeamsSendError_NetworkTimeout(t *testing.T) {
+	err := &url.Error{Op: "Post", URL: "https://example.invalid/messages", Err: timeoutError{}}
+	result := wrapTeamsSendError(err)
+	var status bridgev2.MessageStatus
+	if !errors.As(result, &status) {
+		t.Fatal("expected a MessageStatus")
+	}
+	if !status.SendNotice {
+		t.Error("expected SendNotice for a network timeout")
+	}
+	if status.ErrorReason != event.MessageStatusNetworkError {
+		t.Errorf("expected network error reason, got %q", status.ErrorReason)
+	}
+	if status.Message != "Could not reach Teams, please retry" {
+		t.Errorf("unexpected notice text %q", status.Message)
+	}
+	if status.IsCertain {
+		t.Error("a timeout must not claim certainty that nothing was delivered")
+	}
+}
+
+// timeoutError is a net.Error that reports a timeout, like the one wrapped by
+// net/http when Client.Timeout fires.
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
 
 // ---------------------------------------------------------------------------
 // convertTeamsEdit error paths

@@ -122,3 +122,11 @@ func TestResolveMentionsEmpty(t *testing.T) {
 		t.Fatalf("expected nil, got %#v", resolved)
 	}
 }
+
+func TestExtractMentionMRIsStringWrapped(t *testing.T) {
+	props := []byte(`{"mentions":"[{\"@type\":\"http://schema.skype.com/Mention\",\"itemid\":0,\"mri\":\"8:orgid:abc\",\"mentionType\":\"person\",\"displayName\":\"Ethan\"},{\"itemid\":1,\"mri\":\"8:orgid:abc\",\"displayName\":\"Patrick\"}]"}`)
+	got := ExtractMentionMRIs(props)
+	if got["0"] != "8:orgid:abc" || got["1"] != "8:orgid:abc" {
+		t.Errorf("got %#v", got)
+	}
+}

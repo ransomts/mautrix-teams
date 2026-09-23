@@ -42,26 +42,41 @@ func ExtractMentionMRIs(properties json.RawMessage) map[string]string {
 		return nil
 	}
 	var payload struct {
-		Mentions []struct {
-			ID          json.RawMessage `json:"id"`
-			MRI         string          `json:"mri"`
-			DisplayName string          `json:"displayName"`
-		} `json:"mentions"`
+		Mentions json.RawMessage `json:"mentions"`
 	}
-	if err := json.Unmarshal(properties, &payload); err != nil {
+	if err := json.Unmarshal(properties, &payload); err != nil || len(payload.Mentions) == 0 {
 		return nil
 	}
-	if len(payload.Mentions) == 0 {
+	raw := payload.Mentions
+	// Teams sends the list as a JSON string holding a JSON array.
+	if len(raw) > 0 && raw[0] == '"' {
+		var decoded string
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return nil
+		}
+		raw = json.RawMessage(decoded)
+	}
+	var mentions []struct {
+		ItemID      json.RawMessage `json:"itemid"`
+		ID          json.RawMessage `json:"id"`
+		MRI         string          `json:"mri"`
+		DisplayName string          `json:"displayName"`
+	}
+	if err := json.Unmarshal(raw, &mentions); err != nil || len(mentions) == 0 {
 		return nil
 	}
-	result := make(map[string]string, len(payload.Mentions))
-	for _, m := range payload.Mentions {
+	result := make(map[string]string, len(mentions))
+	for _, m := range mentions {
 		mri := strings.TrimSpace(m.MRI)
 		if mri == "" {
 			continue
 		}
-		// ID can be a number or a string in JSON.
-		idStr := parseMentionID(m.ID)
+		// The index is "itemid" (a number) in what Teams sends; "id" is
+		// kept for older payloads.  Either can be a number or a string.
+		idStr := parseMentionID(m.ItemID)
+		if idStr == "" {
+			idStr = parseMentionID(m.ID)
+		}
 		if idStr != "" {
 			result[idStr] = mri
 		}

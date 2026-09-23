@@ -1343,11 +1343,15 @@ func TestShouldEmitTyping_Deduplication(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestWrapTeamsSendError_NonWrappable(t *testing.T) {
-	// Regular errors should pass through unchanged
+	// Regular errors keep their text but still carry a notice
 	err := errors.New("some random error")
 	wrapped := wrapTeamsSendError(err)
-	if wrapped != err {
-		t.Errorf("non-wrappable error should pass through, got different error")
+	if !errors.Is(wrapped, err) {
+		t.Errorf("wrapped error should unwrap to the original")
+	}
+	var status bridgev2.MessageStatus
+	if !errors.As(wrapped, &status) || !status.SendNotice {
+		t.Errorf("generic send errors should produce a notice")
 	}
 }
 

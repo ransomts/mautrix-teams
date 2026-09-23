@@ -134,3 +134,41 @@ func TestRefreshAccessTokenSetsOriginHeader(t *testing.T) {
 		t.Fatalf("unexpected origin header: %s", gotOrigin)
 	}
 }
+
+func TestNewTransportHealthCheck(t *testing.T) {
+	transport, h2 := newTransport()
+	if h2 == nil {
+		t.Fatal("HTTP/2 was not configured on the transport")
+	}
+	if h2.ReadIdleTimeout != http2ReadIdleTimeout {
+		t.Fatalf("unexpected ReadIdleTimeout: %v", h2.ReadIdleTimeout)
+	}
+	if h2.PingTimeout != http2PingTimeout {
+		t.Fatalf("unexpected PingTimeout: %v", h2.PingTimeout)
+	}
+	if !transport.ForceAttemptHTTP2 {
+		t.Fatal("ForceAttemptHTTP2 is not set")
+	}
+	if transport == http.DefaultTransport {
+		t.Fatal("transport must not be the shared default transport")
+	}
+	if _, ok := transport.TLSNextProto["h2"]; !ok {
+		t.Fatal("h2 is not registered in TLSNextProto")
+	}
+}
+
+func TestNewClientUsesDedicatedTransport(t *testing.T) {
+	a := NewClient(nil)
+	b := NewClient(nil)
+	ta, ok := a.HTTP.Transport.(*trackingTransport)
+	if !ok {
+		t.Fatalf("unexpected transport type %T", a.HTTP.Transport)
+	}
+	tb := b.HTTP.Transport.(*trackingTransport)
+	if ta.base == http.DefaultTransport || tb.base == http.DefaultTransport {
+		t.Fatal("client must not share http.DefaultTransport")
+	}
+	if a.HTTP.Timeout != DefaultHTTPTimeout {
+		t.Fatalf("unexpected timeout: %v", a.HTTP.Timeout)
+	}
+}

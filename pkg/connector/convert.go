@@ -2,9 +2,11 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"maunium.net/go/mautrix/bridgev2"
@@ -18,6 +20,35 @@ import (
 	"go.mau.fi/mautrix-teams/internal/teams/model"
 )
 
+// withSubject puts a channel post's title, when it has one, above the body
+// in bold, so an announcement reads as it does in Teams.
+func withSubject(msg model.RemoteMessage) model.RemoteMessage {
+	subject := model.ExtractSubject(msg.PropertiesRaw)
+	if subject == "" {
+		return msg
+	}
+	body := strings.TrimSpace(msg.Body)
+	formatted := strings.TrimSpace(msg.FormattedBody)
+	if formatted == "" && body != "" {
+		formatted = plainTextToHTML(body)
+	}
+	if body != "" {
+		msg.Body = subject + "\n\n" + body
+	} else {
+		msg.Body = subject
+	}
+	if formatted != "" {
+		msg.FormattedBody = "<strong>" + html.EscapeString(subject) + "</strong><br><br>" + formatted
+	} else {
+		msg.FormattedBody = "<strong>" + html.EscapeString(subject) + "</strong>"
+	}
+	return msg
+}
+
+// errDeletedMessage is returned for a message Teams has deleted: it still
+// lists, with an empty body, and must not be bridged.
+var errDeletedMessage = errors.New("message was deleted on Teams")
+
 func (c *TeamsClient) convertTeamsMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg model.RemoteMessage) (*bridgev2.ConvertedMessage, error) {
 	log := c.log()
 	log.Trace().
@@ -29,6 +60,11 @@ func (c *TeamsClient) convertTeamsMessage(ctx context.Context, portal *bridgev2.
 		Int("body_len", len(msg.Body)).
 		Int("formatted_body_len", len(msg.FormattedBody)).
 		Msg("Converting Teams message")
+
+	if model.IsDeleted(msg.PropertiesRaw) {
+		return nil, errDeletedMessage
+	}
+	msg = withSubject(msg)
 
 	// Check for call/meeting system events first.
 	if cm := convertCallOrMeetingEvent(msg); cm != nil {
@@ -212,6 +248,19 @@ func (c *TeamsClient) convertTeamsMessageLegacy(msg model.RemoteMessage) *bridge
 				body = strings.Join(cardTexts, "\n\n")
 				rendered.FormattedBody = strings.Join(cardHTMLs, "")
 			}
+		}
+	}
+	if body == "" && strings.TrimSpace(rendered.FormattedBody) == "" {
+		// A file shared by link: Teams shows a file card and no text.
+		if links := model.ExtractSafeLinks(msg.PropertiesRaw); len(links) > 0 {
+			lines := make([]string, 0, len(links))
+			items := make([]string, 0, len(links))
+			for _, link := range links {
+				lines = append(lines, "Attachment: "+link)
+				items = append(items, fmt.Sprintf("<li>Attachment: <a href=\"%s\">%s</a></li>", html.EscapeString(link), html.EscapeString(link)))
+			}
+			body = strings.Join(lines, "\n")
+			rendered.FormattedBody = "<ul>" + strings.Join(items, "") + "</ul>"
 		}
 	}
 	extra := perMessageExtraWithRendered(msg, rendered)
@@ -548,6 +597,29 @@ func (c *TeamsClient) getGhostResolver() ghostResolver {
 	return &bridgeGhostResolver{bridge: c.Main.Bridge}
 }
 
+// groupSplitMentions joins the spans Teams makes of one mention.  A name
+// with spaces arrives as one span per word ("Ethan", "Patrick", "Santee"),
+// consecutive item IDs for the same user, joined in the text by
+// non-breaking spaces; the pill should cover the whole name.
+func groupSplitMentions(mentions []model.TeamsMention) []model.TeamsMention {
+	var out []model.TeamsMention
+	for _, m := range mentions {
+		if n := len(out); n > 0 && out[n-1].UserID != "" && out[n-1].UserID == m.UserID && consecutiveItemIDs(out[n-1].ItemID, m.ItemID) {
+			out[n-1].DisplayName += "\u00a0" + m.DisplayName
+			out[n-1].ItemID = m.ItemID
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func consecutiveItemIDs(prev, next string) bool {
+	a, errA := strconv.Atoi(strings.TrimSpace(prev))
+	b, errB := strconv.Atoi(strings.TrimSpace(next))
+	return errA == nil && errB == nil && b == a+1
+}
+
 // applyMentionPills replaces Teams @mention display names in message parts
 // with Matrix mention pills (<a href="https://matrix.to/#/@ghost:domain">@Name</a>).
 func (c *TeamsClient) applyMentionPills(ctx context.Context, parts []*bridgev2.ConvertedMessagePart, mentions []model.TeamsMention) {
@@ -565,15 +637,15 @@ func applyMentionPillsWithResolver(ctx context.Context, parts []*bridgev2.Conver
 		displayName string
 	}
 	var pills []pillInfo
-	for _, m := range mentions {
-		if strings.TrimSpace(m.UserID) == "" || strings.TrimSpace(m.DisplayName) == "" {
+	for _, group := range groupSplitMentions(mentions) {
+		if strings.TrimSpace(group.UserID) == "" || strings.TrimSpace(group.DisplayName) == "" {
 			continue
 		}
-		mxid := resolver.resolveGhostMXID(ctx, m.UserID)
+		mxid := resolver.resolveGhostMXID(ctx, group.UserID)
 		if mxid == "" {
 			continue
 		}
-		pills = append(pills, pillInfo{mxid: mxid, displayName: m.DisplayName})
+		pills = append(pills, pillInfo{mxid: mxid, displayName: group.DisplayName})
 	}
 	if len(pills) == 0 {
 		return
@@ -588,17 +660,20 @@ func applyMentionPillsWithResolver(ctx context.Context, parts []*bridgev2.Conver
 				html.EscapeString(string(pill.mxid)),
 				html.EscapeString(pill.displayName))
 
+			escapedName := html.EscapeString(pill.displayName)
+			spacedName := strings.ReplaceAll(escapedName, "\u00a0", " ")
 			// Replace in FormattedBody (HTML-escaped display name).
 			if part.Content.FormattedBody != "" {
-				escapedName := html.EscapeString(pill.displayName)
 				part.Content.FormattedBody = strings.ReplaceAll(part.Content.FormattedBody, escapedName, pillHTML)
+				part.Content.FormattedBody = strings.ReplaceAll(part.Content.FormattedBody, spacedName, pillHTML)
 				if part.Content.Format == "" {
 					part.Content.Format = event.FormatHTML
 				}
 			} else if part.Content.Body != "" {
 				// No formatted body yet — create one with pills.
 				part.Content.FormattedBody = html.EscapeString(part.Content.Body)
-				part.Content.FormattedBody = strings.ReplaceAll(part.Content.FormattedBody, html.EscapeString(pill.displayName), pillHTML)
+				part.Content.FormattedBody = strings.ReplaceAll(part.Content.FormattedBody, escapedName, pillHTML)
+				part.Content.FormattedBody = strings.ReplaceAll(part.Content.FormattedBody, spacedName, pillHTML)
 				part.Content.Format = event.FormatHTML
 			}
 		}

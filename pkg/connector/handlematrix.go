@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"net"
 	"strings"
 	"time"
 
@@ -90,6 +91,7 @@ func (c *TeamsClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 	default:
 		return nil, bridgev2.ErrUnsupportedMessageType
 	}
+	c.noteTeamsResult(err)
 	if err != nil {
 		log.Warn().Err(err).Str("thread_id", threadID).Str("msg_type", string(msg.Content.MsgType)).Msg("Failed to send message to Teams")
 		msg.RemovePending(networkid.TransactionID(clientMessageID))
@@ -438,7 +440,22 @@ func wrapTeamsSendError(err error) error {
 			WithSendNotice(true).
 			WithErrorReason(event.MessageStatusGenericError)
 	}
-	return err
+	// Every other failure still needs a notice: without SendNotice bridgev2
+	// only records a status event, and a client without MSS support never
+	// learns the message went nowhere. Network errors (timeouts, a lost
+	// connection after a route change) are the common case and get a short
+	// message instead of the request URL.
+	var netErr net.Error
+	if errors.As(err, &netErr) || errors.Is(err, context.DeadlineExceeded) {
+		return bridgev2.WrapErrorInStatus(err).
+			WithMessage("Could not reach Teams, please retry").
+			WithSendNotice(true).
+			WithErrorReason(event.MessageStatusNetworkError)
+	}
+	return bridgev2.WrapErrorInStatus(err).
+		WithErrorAsMessage().
+		WithSendNotice(true).
+		WithErrorReason(event.MessageStatusGenericError)
 }
 
 func (c *TeamsClient) HandleMatrixRoomName(ctx context.Context, msg *bridgev2.MatrixRoomName) (bool, error) {
