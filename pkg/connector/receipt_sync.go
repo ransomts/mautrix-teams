@@ -57,6 +57,10 @@ func (c *TeamsClient) pollConsumptionHorizons(ctx context.Context, th *teamsdb.T
 			lastErr = err
 		}
 	}
+	if err := c.syncOwnHorizon(ctx, log, threadID, selfID, ownHorizon(resp, selfID)); err != nil {
+		log.Debug().Err(err).Msg("own consumption horizon sync failed")
+		lastErr = err
+	}
 	return lastErr
 }
 
@@ -81,6 +85,75 @@ func remoteHorizons(resp *model.ConsumptionHorizonsResponse, selfID string, thre
 		out = append(out, remoteHorizon{id: entryID, horizon: entry})
 	}
 	return out
+}
+
+// ownHorizon returns the bridge user's own horizon, or nil.
+func ownHorizon(resp *model.ConsumptionHorizonsResponse, selfID string) *model.ConsumptionHorizon {
+	if resp == nil {
+		return nil
+	}
+	for idx := range resp.Horizons {
+		if model.NormalizeTeamsUserID(resp.Horizons[idx].ID) == selfID {
+			return &resp.Horizons[idx]
+		}
+	}
+	return nil
+}
+
+// syncOwnHorizon marks the room read on Matrix up to where the user has
+// read the chat in a Teams client.  bridgev2 sends it with the user's
+// double puppet; without one there is no one to send it as, so it is
+// dropped (and not recorded, so it is sent once double puppeting exists).
+func (c *TeamsClient) syncOwnHorizon(ctx context.Context, log zerolog.Logger, threadID string, selfID string, horizon *model.ConsumptionHorizon) error {
+	if horizon == nil || c.Login == nil || c.Login.User == nil || c.Login.User.DoublePuppet(ctx) == nil {
+		return nil
+	}
+	latestReadTS, ok := model.ParseConsumptionHorizonLatestReadTS(horizon.ConsumptionHorizon)
+	if !ok || latestReadTS <= 0 {
+		return nil
+	}
+	state, err := c.Main.DB.ConsumptionHorizon.Get(ctx, c.Login.ID, threadID, selfID)
+	if err != nil {
+		return err
+	}
+	if state != nil && latestReadTS <= state.LastReadTS {
+		return nil
+	}
+	log.Debug().Int64("latest_read_ts", latestReadTS).Msg("own consumption horizon advanced")
+	readUpTo := time.UnixMilli(latestReadTS).UTC()
+	// No target: bridgev2 marks the last message at or before readUpTo.
+	c.queueRemoteEvent(&simplevent.Receipt{
+		EventMeta: simplevent.EventMeta{
+			Type:      bridgev2.RemoteEventReadReceipt,
+			PortalKey: c.portalKey(threadID),
+			Sender:    bridgev2.EventSender{IsFromMe: true, SenderLogin: c.Login.ID, Sender: teamsUserIDToNetworkUserID(selfID)},
+			Timestamp: readUpTo,
+		},
+		ReadUpTo: readUpTo,
+	})
+	return c.Main.DB.ConsumptionHorizon.UpsertLastRead(ctx, c.Login.ID, threadID, selfID, latestReadTS)
+}
+
+// ownHorizonCovers reports whether Teams already has the user's read
+// position at or past readUpTo, as it does when the Matrix receipt is the
+// echo of one syncOwnHorizon sent.
+func (c *TeamsClient) ownHorizonCovers(ctx context.Context, threadID string, readUpTo time.Time) bool {
+	selfID := model.NormalizeTeamsUserID(c.selfTeamsUserID())
+	if readUpTo.IsZero() || selfID == "" || c.Main == nil || c.Main.DB == nil || c.Login == nil {
+		return false
+	}
+	state, err := c.Main.DB.ConsumptionHorizon.Get(ctx, c.Login.ID, threadID, selfID)
+	return err == nil && state != nil && readUpTo.UnixMilli() <= state.LastReadTS
+}
+
+// recordOwnHorizon stores the horizon the bridge just set on Teams, so the
+// next poll does not send it back to Matrix.
+func (c *TeamsClient) recordOwnHorizon(ctx context.Context, threadID string, ts time.Time) {
+	selfID := model.NormalizeTeamsUserID(c.selfTeamsUserID())
+	if selfID == "" || c.Main == nil || c.Main.DB == nil || c.Login == nil {
+		return
+	}
+	_ = c.Main.DB.ConsumptionHorizon.UpsertLastRead(ctx, c.Login.ID, threadID, selfID, ts.UnixMilli())
 }
 
 func (c *TeamsClient) syncParticipantHorizon(ctx context.Context, log zerolog.Logger, threadID string, selfID string, remoteID string, remoteHorizon *model.ConsumptionHorizon) error {

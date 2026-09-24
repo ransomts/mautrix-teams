@@ -250,11 +250,14 @@ func (c *TeamsClient) HandleMatrixReadReceipt(ctx context.Context, msg *bridgev2
 	if threadID == "" {
 		return errors.New("missing thread id")
 	}
-	if !c.shouldSendReceipt(threadID) {
+	if c.ownHorizonCovers(ctx, threadID, msg.ReadUpTo) || !c.shouldSendReceipt(threadID) {
 		return nil
 	}
-	horizon := consumerclient.ConsumptionHorizonNow(time.Now().UTC())
-	_, err := c.getAPI().SetConsumptionHorizon(ctx, threadID, horizon)
+	now := time.Now().UTC()
+	_, err := c.getAPI().SetConsumptionHorizon(ctx, threadID, consumerclient.ConsumptionHorizonNow(now))
+	if err == nil {
+		c.recordOwnHorizon(ctx, threadID, now)
+	}
 	return err
 }
 
