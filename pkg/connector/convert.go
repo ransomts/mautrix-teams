@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -100,7 +101,16 @@ func (c *TeamsClient) convertTeamsMessage(ctx context.Context, portal *bridgev2.
 			Msg("Using legacy conversion path")
 		return c.convertTeamsMessageLegacy(msg), nil
 	}
+	return c.convertTeamsMediaMessage(ctx, portal, intent, msg, attachments), nil
+}
 
+// convertTeamsMediaMessage converts a message that carries media to
+// re-upload (drive-item attachments, inline images or GIF-picker GIFs): the
+// media parts first, then the body as a caption part.  If nothing survives
+// it returns a placeholder rather than dropping the message.  Mention pills,
+// link previews and the thread/reply relations are applied to the result.
+func (c *TeamsClient) convertTeamsMediaMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg model.RemoteMessage, attachments []model.TeamsAttachment) *bridgev2.ConvertedMessage {
+	log := c.log()
 	extra := perMessageExtra(msg)
 
 	roomID := id.RoomID("")
@@ -139,42 +149,13 @@ func (c *TeamsClient) convertTeamsMessage(ctx context.Context, portal *bridgev2.
 			Msg("Conversion produced zero parts, sending placeholder")
 		return &bridgev2.ConvertedMessage{
 			Parts: []*bridgev2.ConvertedMessagePart{unsupportedMessagePart(msg, extra)},
-		}, nil
+		}
 	}
 
 	// Convert Teams @mentions to Matrix mention pills.
 	c.applyMentionPills(ctx, parts, msg.Mentions)
 
-	// Add link preview metadata if present.
-	if previews := model.ExtractLinkPreviews(msg.PropertiesRaw); len(previews) > 0 {
-		previewData := make([]map[string]any, 0, len(previews))
-		for _, p := range previews {
-			pd := map[string]any{"matched_url": p.URL}
-			if p.Title != "" {
-				pd["og:title"] = p.Title
-			}
-			if p.Description != "" {
-				pd["og:description"] = p.Description
-			}
-			if p.ImageURL != "" {
-				pd["og:image"] = p.ImageURL
-			}
-			if p.SiteName != "" {
-				pd["og:site_name"] = p.SiteName
-			}
-			previewData = append(previewData, pd)
-		}
-		// Attach to the last text part's Extra.
-		for i := len(parts) - 1; i >= 0; i-- {
-			if parts[i].Content != nil && parts[i].Content.MsgType == event.MsgText {
-				if parts[i].Extra == nil {
-					parts[i].Extra = make(map[string]any)
-				}
-				parts[i].Extra["com.beeper.linkpreviews"] = previewData
-				break
-			}
-		}
-	}
+	applyLinkPreviews(parts, msg.PropertiesRaw)
 
 	cm := &bridgev2.ConvertedMessage{Parts: parts}
 	// Channel threaded replies: hand the Teams root message ID to bridgev2,
@@ -189,7 +170,43 @@ func (c *TeamsClient) convertTeamsMessage(ctx context.Context, portal *bridgev2.
 			MessageID: networkid.MessageID(replyTo),
 		}
 	}
-	return cm, nil
+	return cm
+}
+
+// applyLinkPreviews adds the link previews Teams stored in the message
+// properties as com.beeper.linkpreviews on the last text part, if any.
+func applyLinkPreviews(parts []*bridgev2.ConvertedMessagePart, properties json.RawMessage) {
+	previews := model.ExtractLinkPreviews(properties)
+	if len(previews) == 0 {
+		return
+	}
+	previewData := make([]map[string]any, 0, len(previews))
+	for _, p := range previews {
+		pd := map[string]any{"matched_url": p.URL}
+		if p.Title != "" {
+			pd["og:title"] = p.Title
+		}
+		if p.Description != "" {
+			pd["og:description"] = p.Description
+		}
+		if p.ImageURL != "" {
+			pd["og:image"] = p.ImageURL
+		}
+		if p.SiteName != "" {
+			pd["og:site_name"] = p.SiteName
+		}
+		previewData = append(previewData, pd)
+	}
+	// Attach to the last text part's Extra.
+	for i := len(parts) - 1; i >= 0; i-- {
+		if parts[i].Content != nil && parts[i].Content.MsgType == event.MsgText {
+			if parts[i].Extra == nil {
+				parts[i].Extra = make(map[string]any)
+			}
+			parts[i].Extra["com.beeper.linkpreviews"] = previewData
+			break
+		}
+	}
 }
 
 func (c *TeamsClient) convertTeamsEdit(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, existing []*database.Message, msg model.RemoteMessage) (*bridgev2.ConvertedEdit, error) {
