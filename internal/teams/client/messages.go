@@ -57,6 +57,7 @@ type remoteMessage struct {
 	MessageType            string          `json:"messagetype"`
 	SkypeEditedID          string          `json:"skypeeditedid"`
 	ComposeTime            string          `json:"composetime"`
+	ConversationLink       string          `json:"conversationLink"`
 }
 
 // listMessagesPageSize is the page size requested from the Teams messages
@@ -215,7 +216,7 @@ func (c *Client) convertRemoteMessage(msg remoteMessage, seen map[string]struct{
 		MessageType:      strings.TrimSpace(msg.MessageType),
 		SkypeEditedID:    strings.TrimSpace(msg.SkypeEditedID),
 		ReplyToID:        model.ExtractReplyToID(msg.Content),
-		ThreadRootID:     model.ExtractThreadRootID(msg.Properties),
+		ThreadRootID:     model.ResolveThreadRootID(msg.ConversationLink, msg.Properties),
 		Mentions:         mentions,
 	}, true, nil
 }

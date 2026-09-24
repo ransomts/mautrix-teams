@@ -162,10 +162,14 @@ func (c *TeamsClient) convertTeamsMediaMessage(ctx context.Context, portal *brid
 
 	applyLinkPreviews(parts, msg.PropertiesRaw)
 
-	cm := &bridgev2.ConvertedMessage{Parts: parts}
-	// Channel threaded replies: hand the Teams root message ID to bridgev2,
-	// which resolves it to the real Matrix event ID (or a deterministic one
-	// during backfill) and emits the m.thread relation itself.
+	return withRelations(&bridgev2.ConvertedMessage{Parts: parts}, msg)
+}
+
+// withRelations sets cm's thread root and reply target from msg.  For a
+// channel reply, the Teams root message ID goes to bridgev2, which resolves
+// it to the Matrix event ID (or a deterministic one during backfill) and
+// emits the m.thread relation itself; a root post is not its own reply.
+func withRelations(cm *bridgev2.ConvertedMessage, msg model.RemoteMessage) *bridgev2.ConvertedMessage {
 	if threadRoot := strings.TrimSpace(msg.ThreadRootID); threadRoot != "" && threadRoot != strings.TrimSpace(msg.MessageID) {
 		root := networkid.MessageID(threadRoot)
 		cm.ThreadRoot = &root
@@ -317,13 +321,7 @@ func (c *TeamsClient) convertTeamsMessageLegacy(msg model.RemoteMessage) *bridge
 	}}
 	c.applyMentionPills(context.Background(), parts, msg.Mentions)
 
-	cm := &bridgev2.ConvertedMessage{Parts: parts}
-	if replyTo := strings.TrimSpace(msg.ReplyToID); replyTo != "" {
-		cm.ReplyTo = &networkid.MessageOptionalPartID{
-			MessageID: networkid.MessageID(replyTo),
-		}
-	}
-	return cm
+	return withRelations(&bridgev2.ConvertedMessage{Parts: parts}, msg)
 }
 
 func (c *TeamsClient) reuploadInboundAttachments(

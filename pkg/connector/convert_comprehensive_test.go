@@ -545,3 +545,19 @@ func TestBuildCaptionPart(t *testing.T) {
 		}
 	})
 }
+
+func TestLegacyConvertThreadsChannelReplies(t *testing.T) {
+	c := &TeamsClient{}
+	reply := c.convertTeamsMessageLegacy(model.RemoteMessage{
+		MessageID: "200", Body: "a reply", MessageType: "RichText/Html", ThreadRootID: "100",
+	})
+	if reply == nil || reply.ThreadRoot == nil || *reply.ThreadRoot != "100" {
+		t.Fatalf("reply not threaded: %+v", reply)
+	}
+	root := c.convertTeamsMessageLegacy(model.RemoteMessage{
+		MessageID: "100", Body: "the post", MessageType: "RichText/Html", ThreadRootID: "100",
+	})
+	if root == nil || root.ThreadRoot != nil {
+		t.Fatalf("root post threaded under itself: %+v", root)
+	}
+}

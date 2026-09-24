@@ -908,3 +908,31 @@ func TestListMessagesWithoutCursorFetchesOnePage(t *testing.T) {
 		t.Fatalf("expected 2 messages, got %d", len(msgs))
 	}
 }
+
+func TestListMessagesChannelThreadRoot(t *testing.T) {
+	// Shaped like what Teams returns for a channel: a reply and its root.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"messages":[` +
+			`{"id":"1768579030785","sequenceId":2,"messagetype":"RichText/Html","content":"reply","rootMessageId":"1768577863084",` +
+			`"conversationLink":"https://x/v1/users/ME/conversations/19:62bf@thread.tacv2;messageid=1768577863084"},` +
+			`{"id":"1768577863084","sequenceId":1,"messagetype":"RichText/Html","content":"root",` +
+			`"conversationLink":"https://x/v1/users/ME/conversations/19:62bf@thread.tacv2;messageid=1768577863084"}]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.Client())
+	client.MessagesURL = server.URL + "/conversations"
+	client.Token = "token123"
+	msgs, err := client.ListMessages(context.Background(), "19:62bf@thread.tacv2", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := map[string]string{}
+	for _, m := range msgs {
+		roots[m.MessageID] = m.ThreadRootID
+	}
+	if roots["1768579030785"] != "1768577863084" || roots["1768577863084"] != "1768577863084" {
+		t.Fatalf("thread roots %v", roots)
+	}
+}
