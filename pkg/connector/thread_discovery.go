@@ -483,22 +483,7 @@ func (c *TeamsClient) applyStructuredRoomNames(ctx context.Context, channelMap m
 		}
 		// Name system streams cleanly instead of skipping them.
 		if strings.Contains(threadID, "teamsstream_") {
-			newName := systemStreamName(threadID)
-			if newName == "" || newName == th.Name {
-				continue
-			}
-			th.Name = newName
-			_ = c.Main.DB.ThreadState.Upsert(ctx, th)
-			chatInfo := &bridgev2.ChatInfo{Name: &newName}
-			c.queueRemoteEvent(&simplevent.ChatResync{
-				EventMeta: simplevent.EventMeta{
-					Type:         bridgev2.RemoteEventChatResync,
-					PortalKey:    c.portalKey(threadID),
-					CreatePortal: false,
-					Timestamp:    time.Now().UTC(),
-				},
-				ChatInfo: chatInfo,
-			})
+			c.renameSystemStream(ctx, th, threadID)
 			continue
 		}
 
@@ -506,96 +491,133 @@ func (c *TeamsClient) applyStructuredRoomNames(ctx context.Context, channelMap m
 		if hasTypePrefix(th.Name) {
 			continue
 		}
-
-		baseName := th.Name
-		if baseName == "" || baseName == "Chat" {
-			baseName = ""
-		}
-
-		var newName string
-		switch {
-		case th.IsOneToOne:
-			if baseName == "" {
-				// Nobody (profile table, Graph) knows the counterpart, which
-				// happens for accounts that have since been deleted.  Name
-				// the room after the ID rather than leaving it nameless,
-				// which showed it as "bridge bot, <me>".
-				baseName = c.resolveDMNameFromThreadID(ctx, threadID)
-				if baseName == "" {
-					newName = placeholderDMName(c.dmCounterpartFromThreadID(threadID))
-					if newName == "" {
-						continue
-					}
-					break
-				}
-			}
-			newName = "DM: " + baseName
-		case strings.Contains(threadID, "meeting_"):
-			if baseName == "" {
-				baseName = "Meeting"
-			}
-			newName = "Meeting: " + baseName
-		case strings.Contains(threadID, "@thread.tacv2"):
-			if info, ok := channelMap[threadID]; ok {
-				teamName := info.TeamName
-				channelName := info.ChannelName
-				if channelName == "" {
-					channelName = baseName
-				}
-				if teamName != "" && channelName != "" {
-					newName = teamName + " / " + channelName
-				} else if channelName != "" {
-					newName = channelName
-				} else if teamName != "" {
-					newName = teamName
-				} else if baseName != "" {
-					newName = baseName
-				} else {
-					newName = threadID
-				}
-			} else if baseName != "" {
-				newName = baseName
-			} else {
-				newName = threadID
-			}
-		default:
-			// Group chat (thread.v2, non-meeting, non-system)
-			if baseName == "" {
-				continue
-			}
-			newName = "Group: " + baseName
-		}
-
-		if newName == th.Name {
+		newName := c.structuredRoomName(ctx, th, threadID, channelMap)
+		if newName == "" || newName == th.Name {
 			continue
 		}
-		log := c.log()
-		log.Debug().Str("thread_id", threadID).Str("old_name", th.Name).Str("new_name", newName).Msg("Applying structured room name")
-		th.Name = newName
-		_ = c.Main.DB.ThreadState.Upsert(ctx, th)
-		chatInfo := &bridgev2.ChatInfo{Name: &newName}
-		// Set parent space and topic (channel description) for channels.
-		if strings.Contains(threadID, "@thread.tacv2") {
-			if info, ok := channelMap[threadID]; ok {
-				if info.TeamID != "" {
-					parentID := teamPortalID(info.TeamID)
-					chatInfo.ParentID = &parentID
-				}
-				if desc := strings.TrimSpace(info.Description); desc != "" {
-					chatInfo.Topic = &desc
-				}
+		c.applyStructuredRoomName(ctx, th, threadID, newName, channelMap)
+	}
+}
+
+// renameSystemStream gives a Teams system stream (teamsstream_*) its clean
+// name, saving it and resyncing the room, unless it already has it.
+func (c *TeamsClient) renameSystemStream(ctx context.Context, th *teamsdb.ThreadState, threadID string) {
+	newName := systemStreamName(threadID)
+	if newName == "" || newName == th.Name {
+		return
+	}
+	th.Name = newName
+	_ = c.Main.DB.ThreadState.Upsert(ctx, th)
+	chatInfo := &bridgev2.ChatInfo{Name: &newName}
+	c.queueRemoteEvent(&simplevent.ChatResync{
+		EventMeta: simplevent.EventMeta{
+			Type:         bridgev2.RemoteEventChatResync,
+			PortalKey:    c.portalKey(threadID),
+			CreatePortal: false,
+			Timestamp:    time.Now().UTC(),
+		},
+		ChatInfo: chatInfo,
+	})
+}
+
+// structuredRoomName returns the prefixed name for a thread not yet named
+// by type: "DM: <name>" (or a placeholder when nobody knows the
+// counterpart), "Meeting: <name>", "<team> / <channel>" for channels, and
+// "Group: <name>" for group chats.  It returns "" when the thread should
+// be left alone (a group chat without a name, a DM with no counterpart).
+func (c *TeamsClient) structuredRoomName(ctx context.Context, th *teamsdb.ThreadState, threadID string, channelMap map[string]graph.ChannelInfo) string {
+	baseName := th.Name
+	if baseName == "" || baseName == "Chat" {
+		baseName = ""
+	}
+
+	switch {
+	case th.IsOneToOne:
+		if baseName == "" {
+			// Nobody (profile table, Graph) knows the counterpart, which
+			// happens for accounts that have since been deleted.  Name
+			// the room after the ID rather than leaving it nameless,
+			// which showed it as "bridge bot, <me>".
+			baseName = c.resolveDMNameFromThreadID(ctx, threadID)
+			if baseName == "" {
+				return placeholderDMName(c.dmCounterpartFromThreadID(threadID))
 			}
 		}
-		c.queueRemoteEvent(&simplevent.ChatResync{
-			EventMeta: simplevent.EventMeta{
-				Type:         bridgev2.RemoteEventChatResync,
-				PortalKey:    c.portalKey(threadID),
-				CreatePortal: false,
-				Timestamp:    time.Now().UTC(),
-			},
-			ChatInfo: chatInfo,
-		})
+		return "DM: " + baseName
+	case strings.Contains(threadID, "meeting_"):
+		if baseName == "" {
+			baseName = "Meeting"
+		}
+		return "Meeting: " + baseName
+	case strings.Contains(threadID, "@thread.tacv2"):
+		return channelRoomName(channelMap, threadID, baseName)
+	default:
+		// Group chat (thread.v2, non-meeting, non-system)
+		if baseName == "" {
+			return ""
+		}
+		return "Group: " + baseName
 	}
+}
+
+// channelRoomName names a channel room "<team> / <channel>" from the Graph
+// channel map, falling back to whichever of the two is known, then the
+// thread's own name, then its ID.
+func channelRoomName(channelMap map[string]graph.ChannelInfo, threadID, baseName string) string {
+	info, ok := channelMap[threadID]
+	if !ok {
+		if baseName != "" {
+			return baseName
+		}
+		return threadID
+	}
+	teamName := info.TeamName
+	channelName := info.ChannelName
+	if channelName == "" {
+		channelName = baseName
+	}
+	if teamName != "" && channelName != "" {
+		return teamName + " / " + channelName
+	} else if channelName != "" {
+		return channelName
+	} else if teamName != "" {
+		return teamName
+	} else if baseName != "" {
+		return baseName
+	}
+	return threadID
+}
+
+// applyStructuredRoomName saves a thread's new structured name and resyncs
+// the room; a channel also gets its team space as parent and its
+// description as topic.
+func (c *TeamsClient) applyStructuredRoomName(ctx context.Context, th *teamsdb.ThreadState, threadID, newName string, channelMap map[string]graph.ChannelInfo) {
+	log := c.log()
+	log.Debug().Str("thread_id", threadID).Str("old_name", th.Name).Str("new_name", newName).Msg("Applying structured room name")
+	th.Name = newName
+	_ = c.Main.DB.ThreadState.Upsert(ctx, th)
+	chatInfo := &bridgev2.ChatInfo{Name: &newName}
+	// Set parent space and topic (channel description) for channels.
+	if strings.Contains(threadID, "@thread.tacv2") {
+		if info, ok := channelMap[threadID]; ok {
+			if info.TeamID != "" {
+				parentID := teamPortalID(info.TeamID)
+				chatInfo.ParentID = &parentID
+			}
+			if desc := strings.TrimSpace(info.Description); desc != "" {
+				chatInfo.Topic = &desc
+			}
+		}
+	}
+	c.queueRemoteEvent(&simplevent.ChatResync{
+		EventMeta: simplevent.EventMeta{
+			Type:         bridgev2.RemoteEventChatResync,
+			PortalKey:    c.portalKey(threadID),
+			CreatePortal: false,
+			Timestamp:    time.Now().UTC(),
+		},
+		ChatInfo: chatInfo,
+	})
 }
 
 // fetchTeamChannelMap uses the Graph API to build a map from channel thread ID
