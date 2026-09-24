@@ -13,7 +13,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"go.mau.fi/mautrix-teams/internal/teams/auth"
-	consumerclient "go.mau.fi/mautrix-teams/internal/teams/client"
 	"go.mau.fi/mautrix-teams/pkg/teamsid"
 )
 
@@ -217,7 +216,7 @@ func (c *TeamsClient) longPollLoop(ctx context.Context) error {
 		c.longPollUp.Store(true)
 
 		for _, evt := range events {
-			threadID := consumerclient.ExtractThreadIDFromResource(evt.Resource)
+			threadID := evt.ThreadID()
 			log.Debug().Str("resource_type", evt.ResourceType).Str("thread_id", threadID).Msg("Long-poll event")
 			if threadID == "" {
 				continue

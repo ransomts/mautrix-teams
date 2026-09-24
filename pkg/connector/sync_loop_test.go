@@ -173,19 +173,20 @@ func TestLongPollLoopGivesUpWhenRegistrationFails(t *testing.T) {
 	}
 }
 
-// BUG?: the long-poll event shape is a guess.  PollEvent.Resource is a
-// string path here; in Skype-style long-poll responses "resource" is
-// usually the message object and the path is in "resourceLink".  The
-// loop has never run against the enterprise service (registration fails,
-// above), so this pins what the code expects rather than what Teams sends.
+// Long-poll events in both shapes: Skype-style, with the message object in
+// "resource" and its URL in "resourceLink", and a plain path in "resource".
+// (The loop has never run against the enterprise service, where
+// registration fails, so neither shape has been seen from this tenant.)
 const longPollEvents = `{
   "eventMessages": [
     {"id": 1001, "type": "EventMessage", "resourceType": "NewMessage", "time": "2026-09-01T12:00:00Z",
-     "resource": "/v1/users/ME/conversations/` + outGroupThread + `/messages/1726000000001"},
+     "resourceLink": "https://amer.ng.msg.teams.microsoft.com/v1/users/ME/conversations/` + outGroupThread + `/messages/1726000000001",
+     "resource": {"id": "1726000000001", "messagetype": "RichText/Html", "content": "hi",
+       "conversationLink": "https://amer.ng.msg.teams.microsoft.com/v1/users/ME/conversations/` + outGroupThread + `"}},
     {"id": 1002, "type": "EventMessage", "resourceType": "ConversationUpdate", "time": "2026-09-01T12:00:01Z",
      "resource": "/v1/users/ME/conversations/` + outDMThread + `"},
     {"id": 1003, "type": "EventMessage", "resourceType": "EndpointPresence", "time": "2026-09-01T12:00:02Z",
-     "resource": "/v1/users/ME/endpoints/SELF"}
+     "resource": {"id": "SELF", "publicInfo": {}}}
   ]
 }`
 

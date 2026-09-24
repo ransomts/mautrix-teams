@@ -1,6 +1,9 @@
 package client
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestExtractThreadIDFromResource(t *testing.T) {
 	tests := []struct {
@@ -47,5 +50,32 @@ func TestExtractThreadIDFromResource(t *testing.T) {
 				t.Errorf("ExtractThreadIDFromResource(%q) = %q, want %q", tt.resource, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPollEventThreadID(t *testing.T) {
+	const events = `{"eventMessages":[
+	  {"id":1,"type":"EventMessage","resourceType":"NewMessage","time":"2026-09-01T12:00:00Z",
+	   "resourceLink":"https://amer.ng.msg.teams.microsoft.com/v1/users/ME/conversations/19:a@thread.v2/messages/1726000000001",
+	   "resource":{"id":"1726000000001","messagetype":"RichText/Html","content":"hi",
+	     "conversationLink":"https://amer.ng.msg.teams.microsoft.com/v1/users/ME/conversations/19:a@thread.v2"}},
+	  {"id":2,"type":"EventMessage","resourceType":"NewMessage","time":"2026-09-01T12:00:01Z",
+	   "resource":{"id":"1726000000002","conversationLink":"https://x/v1/users/ME/conversations/19:b@thread.v2"}},
+	  {"id":3,"type":"EventMessage","resourceType":"ConversationUpdate","time":"2026-09-01T12:00:02Z",
+	   "resource":"/v1/users/ME/conversations/19:c@thread.v2"},
+	  {"id":4,"type":"EventMessage","resourceType":"EndpointPresence","time":"2026-09-01T12:00:03Z",
+	   "resource":{"id":"SELF","publicInfo":{}}}
+	]}`
+	var payload struct {
+		EventMessages []PollEvent `json:"eventMessages"`
+	}
+	if err := json.Unmarshal([]byte(events), &payload); err != nil {
+		t.Fatalf("a message object in resource must decode: %v", err)
+	}
+	want := []string{"19:a@thread.v2", "19:b@thread.v2", "19:c@thread.v2", ""}
+	for i, evt := range payload.EventMessages {
+		if got := evt.ThreadID(); got != want[i] {
+			t.Errorf("event %d: thread %q, want %q", i+1, got, want[i])
+		}
 	}
 }

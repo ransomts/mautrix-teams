@@ -17,9 +17,37 @@ const defaultEndpointsURL = "https://teams.live.com/api/chatsvc/consumer/v1/user
 // PollEvent represents a single notification event from the long-poll endpoint.
 type PollEvent struct {
 	ResourceType string `json:"resourceType"` // "NewMessage", "MessageUpdate", "EndpointPresence", "ThreadUpdate"
-	Resource     string `json:"resource"`     // Resource path, e.g. "/v1/users/ME/conversations/19:xxx@thread.v2/messages/1234"
-	ResourceLink string `json:"resourceLink"` // Full URL to the resource
-	Time         string `json:"time"`         // ISO timestamp
+	// Resource is either the resource's path ("/v1/users/ME/conversations/
+	// 19:xxx@thread.v2/messages/1234") or, as Skype-style long-poll sends
+	// it, the resource itself (a message object).  Kept raw so either shape
+	// decodes; see ThreadID.
+	Resource     json.RawMessage `json:"resource"`
+	ResourceLink string          `json:"resourceLink"` // Full URL to the resource
+	Time         string          `json:"time"`         // ISO timestamp
+}
+
+// ThreadID returns the conversation the event concerns, or "".  It reads
+// resourceLink first, then a path in resource, then the conversationLink
+// (or "to") of a message object in resource.
+func (e PollEvent) ThreadID() string {
+	if id := ExtractThreadIDFromResource(e.ResourceLink); id != "" {
+		return id
+	}
+	var path string
+	if json.Unmarshal(e.Resource, &path) == nil {
+		return ExtractThreadIDFromResource(path)
+	}
+	var obj struct {
+		ConversationLink string `json:"conversationLink"`
+		To               string `json:"to"`
+	}
+	if json.Unmarshal(e.Resource, &obj) == nil {
+		if id := ExtractThreadIDFromResource(obj.ConversationLink); id != "" {
+			return id
+		}
+		return strings.TrimSpace(obj.To)
+	}
+	return ""
 }
 
 // RegisterEndpoint registers a notification endpoint for the current user.
