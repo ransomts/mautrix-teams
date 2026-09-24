@@ -252,15 +252,36 @@ func TestBuildTeamsReplyHTMLSnippets(t *testing.T) {
 // BUG: the 200-byte snippet cut is by byte, so it can split a multi-byte
 // character and put invalid UTF-8 in the quote (json.Marshal then sends
 // U+FFFD).  This documents the current behaviour; see the report.
-func TestBuildTeamsReplyHTMLTruncationSplitsRunes(t *testing.T) {
+func TestBuildTeamsReplyHTMLTruncatesOnCharacterBoundary(t *testing.T) {
 	orig := quotedOriginal("1726000000001")
-	orig.Body = "a" + strings.Repeat("é", 150) // 301 bytes; byte 200 is mid-rune
+	orig.Body = "a" + strings.Repeat("é", 150) // 301 bytes; byte 200 is mid-character
 	api := &outboundAPI{}
 	api.messages = []model.RemoteMessage{orig}
 	c := newSchedTestClient(t, api, &capturingEventSink{}, nil)
 	got := c.buildTeamsReplyHTML(context.Background(), outGroupThread, "1726000000001", "")
-	if utf8.ValidString(got) {
-		t.Fatal("snippet truncation now keeps UTF-8 valid; the bug is fixed, update this test")
+	if !utf8.ValidString(got) {
+		t.Fatalf("snippet truncation split a character: %q", got)
+	}
+	if !strings.Contains(got, "a"+strings.Repeat("é", 99)+"...") {
+		t.Fatalf("snippet not cut back to the last whole character: %q", got)
+	}
+}
+
+func TestTruncateSnippet(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		max  int
+		want string
+	}{
+		{"short", 200, "short"},
+		{"abcdef", 3, "abc..."},
+		{"aé", 2, "a..."},  // é is two bytes; do not keep half of it
+		{"a😀b", 3, "a..."}, // a four-byte emoji
+		{"😀😀", 4, "😀..."},  // exactly one whole character fits
+	} {
+		if got := truncateSnippet(tc.in, tc.max); got != tc.want || !utf8.ValidString(got) {
+			t.Errorf("truncateSnippet(%q, %d) = %q, want %q", tc.in, tc.max, got, tc.want)
+		}
 	}
 }
 
@@ -336,24 +357,51 @@ func TestHandleMatrixMessageSendsGIFByURL(t *testing.T) {
 // BUG (minor): an unsupported message type is refused after the pending
 // echo was registered, and nothing removes it, so each refused event
 // leaves an entry in the portal's outgoing-message map.
-func TestHandleMatrixMessageUnsupportedTypes(t *testing.T) {
-	for _, mt := range []event.MessageType{event.MsgEmote, event.MsgNotice, event.MsgLocation} {
-		t.Run(string(mt), func(t *testing.T) {
+func TestHandleMatrixMessageTextLikeTypes(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content *event.MessageEventContent
+		want    string
+	}{
+		{"notice", &event.MessageEventContent{MsgType: event.MsgNotice, Body: "fyi"}, "<p>fyi</p>"},
+		{"emote", &event.MessageEventContent{MsgType: event.MsgEmote, Body: "waves"}, "<p><em>waves</em></p>"},
+		{"html emote", &event.MessageEventContent{MsgType: event.MsgEmote, Body: "waves twice",
+			Format: event.FormatHTML, FormattedBody: "<p>waves</p><p>twice</p>"}, "<em><p>waves</p><p>twice</p></em>"},
+		{"location", &event.MessageEventContent{MsgType: event.MsgLocation, Body: "Location: Big Ben",
+			GeoURI: "geo:51.5007,-0.1246;u=10"},
+			`<p>Location: Big Ben</p><p><a href="https://www.openstreetmap.org/?mlat=51.5007&amp;mlon=-0.1246#map=16/51.5007/-0.1246">` +
+				`https://www.openstreetmap.org/?mlat=51.5007&amp;mlon=-0.1246#map=16/51.5007/-0.1246</a></p>`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			api := &outboundAPI{}
 			c := newTestClient(nil, &capturingEventSink{})
 			c.api = api
-			msg := textMessage(outDMThread, &event.MessageEventContent{MsgType: mt, Body: "waves"})
-			_, err := c.HandleMatrixMessage(context.Background(), msg)
-			if !isStatus(err, bridgev2.ErrUnsupportedMessageType) {
-				t.Fatalf("err = %v, want ErrUnsupportedMessageType", err)
+			msg := textMessage(outDMThread, tc.content)
+			if _, err := c.HandleMatrixMessage(context.Background(), msg); err != nil {
+				t.Fatal(err)
 			}
-			if len(api.sentMessages) != 0 {
-				t.Fatalf("sent %v", api.sentMessages)
-			}
-			if n := pendingCount(msg.Portal); n != 1 {
-				t.Fatalf("pending entries = %d; the leak is fixed if 0, update this test", n)
+			sent, _ := api.sent(t)
+			if sent.Text != tc.want {
+				t.Errorf("\n got %s\nwant %s", sent.Text, tc.want)
 			}
 		})
+	}
+}
+
+func TestHandleMatrixMessageUnsupportedTypeLeavesNoPending(t *testing.T) {
+	api := &outboundAPI{}
+	c := newTestClient(nil, &capturingEventSink{})
+	c.api = api
+	msg := textMessage(outDMThread, &event.MessageEventContent{MsgType: event.MsgVerificationRequest, Body: "verify"})
+	_, err := c.HandleMatrixMessage(context.Background(), msg)
+	if !isStatus(err, bridgev2.ErrUnsupportedMessageType) {
+		t.Fatalf("err = %v, want ErrUnsupportedMessageType", err)
+	}
+	if len(api.sentMessages) != 0 {
+		t.Fatalf("sent %v", api.sentMessages)
+	}
+	if n := pendingCount(msg.Portal); n != 0 {
+		t.Fatalf("refused message left %d pending entries", n)
 	}
 }
 
@@ -493,22 +541,41 @@ func TestHandleMatrixEditSendsFormattedBody(t *testing.T) {
 	}
 }
 
-// BUG: an edit's plain body goes to Teams as RichText/Html unescaped and
-// unwrapped, unlike a new message (plaintextToTeamsHTML), so "<" and "&"
-// are taken as markup and newlines collapse; an HTML edit also skips
-// matrixHTMLToTeamsHTML and mention conversion.  This documents the
-// current behaviour; see the report.
-func TestHandleMatrixEditPlainBodyIsNotEscaped(t *testing.T) {
+func TestHandleMatrixEditBuildsBodyLikeNewMessages(t *testing.T) {
 	api := &mockTeamsAPI{}
 	c := newTestClient(api, &capturingEventSink{})
 	err := c.HandleMatrixEdit(context.Background(), editMessage(&event.MessageEventContent{
-		MsgType: event.MsgText, Body: "x < y & z",
+		MsgType: event.MsgText, Body: "x < y & z\nnext",
 	}, "1726000000001"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := api.sentEdits[0].NewHTML; got != "x < y & z" {
-		t.Fatalf("edit body %q: the escaping bug is fixed, update this test", got)
+	if got := api.sentEdits[0].NewHTML; got != "<p>x &lt; y &amp; z<br>next</p>" {
+		t.Fatalf("plain edit body %q", got)
+	}
+}
+
+func TestHandleMatrixEditConvertsMentionsAndDropsReplyFallback(t *testing.T) {
+	api := &outboundAPI{}
+	c, mx := newBridgeTestClient(t, api, &capturingEventSink{})
+	ann := mx.ghostMXID("8:orgid:00000002-0000-0000-0000-000000000002")
+	err := c.HandleMatrixEdit(context.Background(), editMessage(&event.MessageEventContent{
+		MsgType: event.MsgText,
+		Body:    "Ann Example: fixed",
+		Format:  event.FormatHTML,
+		FormattedBody: `<mx-reply><blockquote>quoted</blockquote></mx-reply>` +
+			`<a href="https://matrix.to/#/` + string(ann) + `">Ann Example</a>: fixed`,
+	}, "1726000000001"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := api.sentEdits[0]
+	want := `<span itemtype="http://schema.skype.com/Mention" itemid="0">@Ann Example</span>: fixed`
+	if got.NewHTML != want {
+		t.Errorf("edit body:\n got %s\nwant %s", got.NewHTML, want)
+	}
+	if len(got.Mentions) != 1 || got.Mentions[0]["mri"] != "8:orgid:00000002-0000-0000-0000-000000000002" {
+		t.Errorf("edit mentions = %v", got.Mentions)
 	}
 }
 

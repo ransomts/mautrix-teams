@@ -44,7 +44,7 @@ func (m *errorMockTeamsAPI) SendFormattedMessage(_ context.Context, _, _, _, _, 
 	return 0, m.sendErr
 }
 
-func (m *errorMockTeamsAPI) EditMessage(_ context.Context, _, _, _, _ string) error {
+func (m *errorMockTeamsAPI) EditMessage(_ context.Context, _, _, _, _ string, _ []map[string]any) error {
 	return m.editErr
 }
 

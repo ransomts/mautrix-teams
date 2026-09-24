@@ -24,7 +24,7 @@ type TeamsAPI interface {
 	SendFormattedMessage(ctx context.Context, threadID string, htmlContent string, fromUserID string, clientMessageID string, replyToID string, mentions []map[string]any) (int, error)
 	SendGIFWithID(ctx context.Context, threadID string, gifURL string, title string, fromUserID string, clientMessageID string) (int, error)
 	SendAttachmentMessageWithID(ctx context.Context, threadID string, htmlContent string, filesProperty string, fromUserID string, clientMessageID string) (int, error)
-	EditMessage(ctx context.Context, threadID string, messageID string, newHTMLContent string, fromUserID string) error
+	EditMessage(ctx context.Context, threadID string, messageID string, newHTMLContent string, fromUserID string, mentions []map[string]any) error
 	DeleteMessage(ctx context.Context, threadID string, messageID string, fromUserID string) error
 	AddReaction(ctx context.Context, threadID string, teamsMessageID string, emotionKey string, appliedAtMS int64) (int, error)
 	RemoveReaction(ctx context.Context, threadID string, teamsMessageID string, emotionKey string) (int, error)

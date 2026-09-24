@@ -547,7 +547,7 @@ func (c *Client) postRichTextMessage(ctx context.Context, threadID string, htmlC
 	return resp.StatusCode, nil
 }
 
-func (c *Client) EditMessage(ctx context.Context, threadID string, messageID string, newHTMLContent string, fromUserID string) error {
+func (c *Client) EditMessage(ctx context.Context, threadID string, messageID string, newHTMLContent string, fromUserID string, mentions []map[string]any) error {
 	if c == nil || c.HTTP == nil {
 		return ErrMissingHTTPClient
 	}
@@ -578,6 +578,9 @@ func (c *Client) EditMessage(ctx context.Context, threadID string, messageID str
 		"skypeeditedid":  messageID,
 		"from":           fromUserID,
 		"fromUserId":     fromUserID,
+	}
+	if len(mentions) > 0 {
+		payload["properties"] = map[string]any{"mentions": mentions}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

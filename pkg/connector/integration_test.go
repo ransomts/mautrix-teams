@@ -58,6 +58,7 @@ type sentMessage struct {
 }
 type sentEdit struct {
 	ThreadID, MessageID, NewHTML, FromUserID string
+	Mentions                                 []map[string]any
 }
 type sentDelete struct {
 	ThreadID, MessageID, FromUserID string
@@ -178,11 +179,11 @@ func (m *mockTeamsAPI) SendAttachmentMessageWithID(_ context.Context, _, _, _, _
 	return 200, nil
 }
 
-func (m *mockTeamsAPI) EditMessage(_ context.Context, threadID, messageID, newHTML, fromUserID string) error {
+func (m *mockTeamsAPI) EditMessage(_ context.Context, threadID, messageID, newHTML, fromUserID string, mentions []map[string]any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sentEdits = append(m.sentEdits, sentEdit{
-		ThreadID: threadID, MessageID: messageID, NewHTML: newHTML, FromUserID: fromUserID,
+		ThreadID: threadID, MessageID: messageID, NewHTML: newHTML, FromUserID: fromUserID, Mentions: mentions,
 	})
 	return nil
 }
@@ -987,8 +988,8 @@ func TestHandleMatrixEdit(t *testing.T) {
 	if edit.MessageID != "original-msg-id" {
 		t.Errorf("expected messageID=original-msg-id, got %s", edit.MessageID)
 	}
-	if edit.NewHTML != "edited text" {
-		t.Errorf("expected newHTML='edited text', got '%s'", edit.NewHTML)
+	if edit.NewHTML != "<p>edited text</p>" {
+		t.Errorf("expected newHTML='<p>edited text</p>', got '%s'", edit.NewHTML)
 	}
 }
 
@@ -1107,7 +1108,7 @@ func TestHandleMatrixMessage_UnsupportedType(t *testing.T) {
 	portal := newTestPortal(networkid.PortalID(testThreadID), "")
 	msg := &bridgev2.MatrixMessage{
 		MatrixEventBase: bridgev2.MatrixEventBase[*event.MessageEventContent]{
-			Content: &event.MessageEventContent{MsgType: event.MsgNotice, Body: "notice"},
+			Content: &event.MessageEventContent{MsgType: event.MsgVerificationRequest, Body: "verify"},
 			Portal:  portal,
 			Event:   newTestEvent(),
 		},

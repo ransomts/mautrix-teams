@@ -41,6 +41,11 @@ func (c *TeamsClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 		Bool("has_reply", msg.ReplyTo != nil && msg.ReplyTo.ID != "").
 		Msg("Handling outbound Matrix message")
 
+	if !outboundMsgTypeSupported(msg.Content.MsgType) {
+		// Refused before a pending entry is saved, or it would never be removed.
+		return nil, bridgev2.ErrUnsupportedMessageType
+	}
+
 	api := c.getAPI()
 
 	clientMessageID := consumerclient.GenerateClientMessageID()
@@ -55,18 +60,8 @@ func (c *TeamsClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 
 	var err error
 	switch msg.Content.MsgType {
-	case event.MsgText:
-		// Produce Teams HTML. A Matrix HTML message (e.g. ement's Org filter,
-		// which wraps even plain text in <p>) is already HTML and must not be
-		// escaped, or Teams shows the literal tags; a plain-text message is
-		// escaped and wrapped. Then convert mention pills to Teams spans.
-		var body string
-		if msg.Content.Format == event.FormatHTML && msg.Content.FormattedBody != "" {
-			body = matrixHTMLToTeamsHTML(msg.Content.FormattedBody)
-		} else {
-			body = plaintextToTeamsHTML(msg.Content.Body)
-		}
-		body, mentionProps := c.convertMatrixMentionsToTeams(body)
+	case event.MsgText, event.MsgNotice, event.MsgEmote, event.MsgLocation:
+		body, mentionProps := c.outboundTextHTML(msg.Content)
 		replyToID := ""
 		if isChannelThread(threadID) {
 			// Teams channel messages are organised into threads. Post the reply
@@ -297,11 +292,10 @@ func (c *TeamsClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.Matrix
 		return errors.New("missing teams message id for edit target")
 	}
 	log.Debug().Str("thread_id", threadID).Str("target_id", teamsMessageID).Msg("Editing Teams message")
-	newBody := msg.Content.Body
-	if msg.Content.Format == event.FormatHTML && msg.Content.FormattedBody != "" {
-		newBody = msg.Content.FormattedBody
-	}
-	err := c.getAPI().EditMessage(ctx, threadID, teamsMessageID, newBody, c.selfTeamsUserID())
+	// The same Teams HTML a new message gets: escaped plain text, the reply
+	// fallback stripped, mention pills as Teams mentions.
+	newBody, mentionProps := c.outboundTextHTML(msg.Content)
+	err := c.getAPI().EditMessage(ctx, threadID, teamsMessageID, newBody, c.selfTeamsUserID(), mentionProps)
 	if err != nil {
 		log.Warn().Err(err).Str("thread_id", threadID).Str("target_id", teamsMessageID).Msg("Failed to edit Teams message")
 	}
@@ -361,10 +355,7 @@ func (c *TeamsClient) buildTeamsReplyHTML(ctx context.Context, threadID, replyTo
 		} else if snippet == "" && len(origMsg.GIFs) > 0 {
 			snippet = "GIF"
 		}
-		// Truncate long snippets.
-		if len(snippet) > 200 {
-			snippet = snippet[:200] + "..."
-		}
+		snippet = truncateSnippet(snippet, 200)
 		return fmt.Sprintf(
 			`<blockquote itemtype="http://schema.skype.com/Reply" itemid="%s"><strong>%s</strong><br>%s</blockquote>%s`,
 			html.EscapeString(replyToMessageID),
