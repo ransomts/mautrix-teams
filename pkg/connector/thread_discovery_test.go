@@ -167,9 +167,9 @@ func TestRefreshThreadsDiscoversConversations(t *testing.T) {
 	}
 	info := func(id string) *bridgev2.ChatInfo { return events[networkid.PortalID(id)].ChatInfo }
 
-	// A titled group chat: the title is announced as name and also as
-	// topic (threadProperties.topic is where Teams keeps a chat's title).
-	if got := info(outGroupThread); strp(got.Name) != "Project X" || strp(got.Topic) != "Project X" ||
+	// A titled group chat: the title (threadProperties.topic, where Teams
+	// keeps it) is the name; the topic is cleared, not a copy of the title.
+	if got := info(outGroupThread); strp(got.Name) != "Project X" || got.Topic == nil || *got.Topic != "" ||
 		*got.Type != database.RoomTypeDefault || got.Members != nil {
 		t.Errorf("titled group: %+v", got)
 	}

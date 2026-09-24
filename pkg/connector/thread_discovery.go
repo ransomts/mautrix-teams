@@ -89,9 +89,14 @@ func (c *TeamsClient) refreshThreads(ctx context.Context) error {
 			chatInfo.Name = &name
 		}
 
-		// Sync topic from conversation properties.
-		if topic := conv.ResolveTopic(); topic != "" {
-			chatInfo.Topic = &topic
+		// No topic from the conversation list: its "topic" fields hold a
+		// chat's title (and a channel's or meeting's name), not a
+		// description, so they only duplicated the name.  Chats get an empty
+		// topic, which also clears the copies older versions set; a
+		// channel's topic is its Graph description, set by the naming pass.
+		if !isChannelThread(thread.ID) {
+			empty := ""
+			chatInfo.Topic = &empty
 		}
 
 		// Sync member list from conversation data; a DM without member data
