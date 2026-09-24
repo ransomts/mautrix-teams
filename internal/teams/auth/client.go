@@ -146,5 +146,7 @@ func (t *trackingTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	if t.store != nil {
 		t.store.TrackRequest(req)
 	}
-	return t.base.RoundTrip(req)
+	resp, err := t.base.RoundTrip(req)
+	countRequest(req, resp)
+	return resp, err
 }

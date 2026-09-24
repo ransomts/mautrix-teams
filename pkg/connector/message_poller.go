@@ -12,6 +12,7 @@ import (
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/bridgev2/simplevent"
 
+	"go.mau.fi/mautrix-teams/internal/teams/auth"
 	"go.mau.fi/mautrix-teams/internal/teams/model"
 	"go.mau.fi/mautrix-teams/pkg/teamsdb"
 )
@@ -117,6 +118,8 @@ type pollSchedule struct {
 	activityFailures             int
 	// nextSweep is when the client's caches are next swept.
 	nextSweep time.Time
+	// nextStats is when the request tally is next logged.
+	nextStats time.Time
 	// throttledUntil pauses all polling after Teams answers 429.
 	throttledUntil time.Time
 	// lastSeen maps conversation ID to its newest message ID, for the
@@ -169,6 +172,13 @@ func (c *TeamsClient) pollPass(ctx context.Context, now time.Time, states map[st
 			log.Debug().Int("removed", n).Msg("Swept expired cache entries")
 		}
 		sched.nextSweep = now.Add(cacheSweepInterval)
+	}
+	if sched.nextStats.IsZero() {
+		auth.TakeRequestStats() // start the first hour's tally now
+		sched.nextStats = now.Add(requestStatsInterval)
+	} else if !now.Before(sched.nextStats) {
+		logRequestStats(*log, now.Sub(sched.nextStats.Add(-requestStatsInterval)))
+		sched.nextStats = now.Add(requestStatsInterval)
 	}
 
 	threads, err := c.Main.DB.ThreadState.ListForLogin(ctx, c.Login.ID)
