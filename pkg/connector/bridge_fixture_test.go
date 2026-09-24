@@ -197,6 +197,11 @@ func (g *routeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	} else {
 		h(rec, req)
 	}
+	// A handler that waited for the request to be abandoned: fail the way
+	// a real transport does.
+	if err := req.Context().Err(); err != nil {
+		return nil, err
+	}
 	resp := rec.Result()
 	resp.Request = req
 	return resp, nil
