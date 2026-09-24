@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -22,5 +23,5 @@ func TestPresenceForbiddenFlagStopsPolling(t *testing.T) {
 	}
 	// pollPresence returns immediately once the flag is set; exercise the guard.
 	c.presenceForbidden.Store(true)
-	c.pollPresence(nil) // must not panic despite nil ctx/deps because the flag short-circuits after the nil check
+	c.pollPresence(context.Background()) // must not panic despite nil deps: the nil-deps guard returns before any work
 }

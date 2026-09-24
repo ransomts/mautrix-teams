@@ -27,7 +27,6 @@ type errorMockTeamsAPI struct {
 	deleteErr       error
 	reactionErr     error
 	typingErr       error
-	horizonErr      error
 	topicErr        error
 	addMemberErr    error
 	removeMemberErr error

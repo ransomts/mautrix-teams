@@ -142,9 +142,13 @@ func (c *TeamsClient) syncChannelParents(ctx context.Context, channelMap map[str
 		pctx := plog.WithContext(ctx)
 		if portal.Parent.MXID == "" {
 			plog.Info().Msg("Channel portal's team space has no room; creating it and adding the channel")
+			// bridgev2 only does this itself when a portal's parent changes or its
+			// room is created, and exposes it nowhere but Internal().
+			//lint:ignore SA1019 no public alternative for re-adding an existing portal to its space
 			portal.Internal().CreateParentAndAddToSpace(pctx, c.Login)
 		} else {
 			plog.Info().Msg("Channel portal is not in its team space; adding it")
+			//lint:ignore SA1019 no public alternative for re-adding an existing portal to its space
 			portal.Internal().AddToParentSpaceAndSave(pctx, true)
 		}
 	}

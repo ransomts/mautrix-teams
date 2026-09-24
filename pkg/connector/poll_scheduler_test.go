@@ -11,10 +11,11 @@ import (
 
 	"github.com/rs/zerolog"
 	"go.mau.fi/util/dbutil"
-	// Registers the "sqlite3-fk-wal" driver the bridge uses at runtime.
-	_ "go.mau.fi/util/dbutil/litestream"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
+
+	// Registers the "sqlite3-fk-wal" driver the bridge uses at runtime.
+	_ "go.mau.fi/util/dbutil/litestream"
 
 	consumerclient "go.mau.fi/mautrix-teams/internal/teams/client"
 	"go.mau.fi/mautrix-teams/internal/teams/model"

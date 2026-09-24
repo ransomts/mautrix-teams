@@ -8,10 +8,11 @@ import (
 
 	"github.com/rs/zerolog"
 	"go.mau.fi/util/dbutil"
+	"maunium.net/go/mautrix/bridgev2/networkid"
+
 	// Registers the "sqlite3-fk-wal" driver (a mattn/go-sqlite3 wrapper) that
 	// the bridge itself uses at runtime, so no extra go.mod dependency is needed.
 	_ "go.mau.fi/util/dbutil/litestream"
-	"maunium.net/go/mautrix/bridgev2/networkid"
 )
 
 const testBridgeID networkid.BridgeID = "teams-test"

@@ -341,38 +341,37 @@ func (c *TeamsClient) buildTeamsReplyHTML(ctx context.Context, threadID, replyTo
 		conversationID = row.Conversation
 	}
 
-	api := c.getAPI()
-	if api != nil {
-		origMsg, err := api.GetMessage(ctx, conversationID, replyToMessageID)
-		if err == nil && origMsg != nil {
-			senderName := origMsg.IMDisplayName
-			if senderName == "" {
-				senderName = origMsg.TokenDisplayName
-			}
-			snippet := origMsg.Body
-			if snippet == "" {
-				snippet = origMsg.FormattedBody
-			}
-			// Use placeholder for media-only messages.
-			if snippet == "" && len(origMsg.InlineImages) > 0 {
-				snippet = "\U0001f4f7"
-			} else if snippet == "" && origMsg.PropertiesFiles != "" {
-				snippet = "\U0001f4ce"
-			} else if snippet == "" && len(origMsg.GIFs) > 0 {
-				snippet = "GIF"
-			}
-			// Truncate long snippets.
-			if len(snippet) > 200 {
-				snippet = snippet[:200] + "..."
-			}
-			return fmt.Sprintf(
-				`<blockquote itemtype="http://schema.skype.com/Reply" itemid="%s"><strong>%s</strong><br>%s</blockquote>%s`,
-				html.EscapeString(replyToMessageID),
-				html.EscapeString(senderName),
-				html.EscapeString(snippet),
-				body,
-			)
+	// getAPI never returns nil; a nil consumer client makes GetMessage
+	// return an error, which falls through to the empty blockquote.
+	origMsg, err := c.getAPI().GetMessage(ctx, conversationID, replyToMessageID)
+	if err == nil && origMsg != nil {
+		senderName := origMsg.IMDisplayName
+		if senderName == "" {
+			senderName = origMsg.TokenDisplayName
 		}
+		snippet := origMsg.Body
+		if snippet == "" {
+			snippet = origMsg.FormattedBody
+		}
+		// Use placeholder for media-only messages.
+		if snippet == "" && len(origMsg.InlineImages) > 0 {
+			snippet = "\U0001f4f7"
+		} else if snippet == "" && origMsg.PropertiesFiles != "" {
+			snippet = "\U0001f4ce"
+		} else if snippet == "" && len(origMsg.GIFs) > 0 {
+			snippet = "GIF"
+		}
+		// Truncate long snippets.
+		if len(snippet) > 200 {
+			snippet = snippet[:200] + "..."
+		}
+		return fmt.Sprintf(
+			`<blockquote itemtype="http://schema.skype.com/Reply" itemid="%s"><strong>%s</strong><br>%s</blockquote>%s`,
+			html.EscapeString(replyToMessageID),
+			html.EscapeString(senderName),
+			html.EscapeString(snippet),
+			body,
+		)
 	}
 
 	// Fallback: empty blockquote (better than nothing).

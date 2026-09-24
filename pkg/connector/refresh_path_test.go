@@ -4,14 +4,14 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"testing"
 
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 
 	"go.mau.fi/mautrix-teams/internal/teams/auth"
 	"go.mau.fi/mautrix-teams/pkg/teamsid"
-	"strings"
-	"testing"
 )
 
 func TestTenantTokenEndpointSelection(t *testing.T) {
