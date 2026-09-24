@@ -230,8 +230,14 @@ func TestLongPollLoopWakesNamedThreads(t *testing.T) {
 		{threadID: outGroupThread, receipts: false}, // a message: no receipt check
 		{threadID: outDMThread, receipts: true},     // anything else may be a read position
 	}
-	if len(wakes) != len(want) || wakes[0] != want[0] || wakes[1] != want[1] {
-		t.Errorf("wakeups %+v, want %+v", wakes, want)
+	same := len(wakes) == len(want)
+	for i := 0; same && i < len(want); i++ {
+		// A wakeup also carries when and by what it was noticed.
+		same = wakes[i].threadID == want[i].threadID && wakes[i].receipts == want[i].receipts &&
+			wakes[i].source == "longpoll" && !wakes[i].at.IsZero()
+	}
+	if !same {
+		t.Errorf("wakeups %+v, want %+v (source longpoll, time set)", wakes, want)
 	}
 
 	cancel()
