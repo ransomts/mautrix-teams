@@ -84,6 +84,12 @@ func (m *fakeMatrix) setNames() map[networkid.UserID]string {
 	return out
 }
 
+func (m *fakeMatrix) deleted() []id.RoomID {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]id.RoomID(nil), m.deletedRooms...)
+}
+
 // fakeIntent is a ghost's (or the bot's) MatrixAPI.
 type fakeIntent struct {
 	bridgev2.MatrixAPI
@@ -150,6 +156,15 @@ func insertTestGhost(t *testing.T, c *TeamsClient, userID, name string) {
 	g := &database.Ghost{BridgeID: schedTestBridgeID, ID: networkid.UserID(userID), Name: name, NameSet: name != ""}
 	if err := c.Main.Bridge.DB.Ghost.Insert(context.Background(), g); err != nil {
 		t.Fatalf("insert ghost %s: %v", userID, err)
+	}
+}
+
+// insertTestPortal stores a portal row.
+func insertTestPortal(t *testing.T, c *TeamsClient, p *database.Portal) {
+	t.Helper()
+	p.BridgeID = schedTestBridgeID
+	if err := c.Main.Bridge.DB.Portal.Insert(context.Background(), p); err != nil {
+		t.Fatalf("insert portal %s: %v", p.ID, err)
 	}
 }
 
