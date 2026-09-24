@@ -38,7 +38,7 @@ func TestApplyWakeupMatchesThreadOrConversation(t *testing.T) {
 func TestRequestPollNeverBlocks(t *testing.T) {
 	c := &TeamsClient{}
 	for i := 0; i < wakeQueueSize+10; i++ {
-		c.requestPoll("19:a@thread.v2", false)
+		c.requestPoll("19:a@thread.v2", false, "test")
 	}
 	if got := len(c.wakeChan()); got != wakeQueueSize {
 		t.Fatalf("queue holds %d, want %d", got, wakeQueueSize)

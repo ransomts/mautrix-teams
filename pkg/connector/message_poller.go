@@ -22,6 +22,10 @@ type pollState struct {
 	nextPoll     time.Time
 	conversation string // the thread's conversation ID, for matching wakeups
 	gone         bool   // Teams reported the thread deleted; polled rarely
+	// noticedAt and noticedBy record the first wakeup since the last poll,
+	// for the latency log (message_latency.go).
+	noticedAt time.Time
+	noticedBy string
 }
 
 const (
@@ -209,7 +213,12 @@ func (c *TeamsClient) pollPass(ctx context.Context, now time.Time, states map[st
 			continue
 		}
 
-		ingested, err := c.pollThread(ctx, th, now)
+		trigger := &pollTrigger{noticed: ps.noticedAt, by: ps.noticedBy}
+		if trigger.noticed.IsZero() {
+			trigger.noticed, trigger.by = now, "schedule"
+		}
+		ps.noticedAt, ps.noticedBy = time.Time{}, ""
+		ingested, err := c.pollThread(withPollTrigger(ctx, trigger), th, now)
 		if sched.throttle(ctx, err, now) {
 			// Leave this thread and the rest due; they go first once the
 			// pause is over.
@@ -370,6 +379,9 @@ func (c *TeamsClient) fetchThreadPage(ctx context.Context, th *teamsdb.ThreadSta
 	log.Trace().Str("thread_id", th.ThreadID).Str("last_seq", th.LastSequenceID).Msg("Polling thread")
 	msgs, err := c.getAPI().ListMessages(ctx, th.Conversation, th.LastSequenceID)
 	c.noteTeamsResult(err)
+	if trigger := pollTriggerFrom(ctx); trigger != nil {
+		trigger.fetched = time.Now()
+	}
 	if err != nil {
 		log.WithLevel(c.pollFailureLevel(ctx, err)).Err(err).Str("thread_id", th.ThreadID).Msg("Failed to poll thread")
 		return nil, err
@@ -528,6 +540,9 @@ func (c *TeamsClient) queueUserMessage(ctx context.Context, th *teamsdb.ThreadSt
 		ID:                 networkid.MessageID(eventMessageID),
 		TransactionID:      networkid.TransactionID(clientMessageID),
 		ConvertMessageFunc: c.convertTeamsMessage,
+	}
+	if !es.IsFromMe {
+		evt.PostHandleFunc = c.latencyLogger(ctx, th.ThreadID, eventMessageID, msg.Timestamp)
 	}
 	c.queueForCursor(ctx, evt, &evt.EventMeta, commit)
 	c.queueReactionSyncForMessage(ctx, th, msg, eventMessageID)

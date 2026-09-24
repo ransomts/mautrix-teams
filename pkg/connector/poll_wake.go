@@ -43,7 +43,9 @@ const (
 
 type pollWakeup struct {
 	threadID string
-	receipts bool // also check read positions now
+	receipts bool      // also check read positions now
+	at       time.Time // when the change was noticed, for the latency log
+	source   string    // what noticed it: watch, send or longpoll
 }
 
 func (c *TeamsClient) wakeChan() chan pollWakeup {
@@ -53,12 +55,12 @@ func (c *TeamsClient) wakeChan() chan pollWakeup {
 
 // requestPoll asks the poll loop to poll threadID (a thread or conversation
 // ID) now. It never blocks.
-func (c *TeamsClient) requestPoll(threadID string, receipts bool) {
+func (c *TeamsClient) requestPoll(threadID string, receipts bool, source string) {
 	if c == nil || threadID == "" {
 		return
 	}
 	select {
-	case c.wakeChan() <- pollWakeup{threadID: threadID, receipts: receipts}:
+	case c.wakeChan() <- pollWakeup{threadID: threadID, receipts: receipts, at: time.Now(), source: source}:
 	default:
 	}
 }
@@ -126,7 +128,8 @@ func (c *TeamsClient) checkActivity(ctx context.Context, states map[string]*poll
 		}
 		watched = true
 		if prev, ok := lastSeen[conv.ID]; prev != newest && (ok || primed) {
-			if !c.applyWakeup(pollWakeup{threadID: conv.ID}, states) && !isNonPollableSystemStream(conv.ID) {
+			w := pollWakeup{threadID: conv.ID, at: time.Now(), source: "watch"}
+			if !c.applyWakeup(w, states) && !isNonPollableSystemStream(conv.ID) {
 				unknown = true
 			}
 		}
@@ -152,6 +155,10 @@ func (c *TeamsClient) applyWakeup(w pollWakeup, states map[string]*pollState) bo
 		}
 		matched = true
 		ps.nextPoll = time.Time{}
+		// The earliest notice since the last poll is when the wait began.
+		if !w.at.IsZero() && (ps.noticedAt.IsZero() || w.at.Before(ps.noticedAt)) {
+			ps.noticedAt, ps.noticedBy = w.at, w.source
+		}
 		ps.backoff.OnSuccess()
 		if w.receipts {
 			c.forgetReceiptPoll(threadID)

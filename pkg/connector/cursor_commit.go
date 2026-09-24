@@ -150,7 +150,15 @@ func (cc *cursorCommit) done(ctx context.Context) {
 // counts towards commit.
 func (c *TeamsClient) queueForCursor(ctx context.Context, evt bridgev2.RemoteEvent, meta *simplevent.EventMeta, commit *cursorCommit) {
 	handled := commit.track()
-	meta.PostHandleFunc = handled
+	if also := meta.PostHandleFunc; also != nil {
+		// The caller's own hook (the latency log) runs after the cursor's.
+		meta.PostHandleFunc = func(ctx context.Context, portal *bridgev2.Portal) {
+			handled(ctx, portal)
+			also(ctx, portal)
+		}
+	} else {
+		meta.PostHandleFunc = handled
+	}
 	// Not queued: bridgev2 either handled it already (PortalEventBuffer 0,
 	// where PostHandle has run) or refused it (no portal), where PostHandle
 	// never will. Either way it is finished with.

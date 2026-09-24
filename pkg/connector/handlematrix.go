@@ -102,7 +102,7 @@ func (c *TeamsClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 	// Fetch the echo now rather than at the thread's next poll: bridgev2
 	// sends the delivery receipt only when it arrives.
 	c.noteThreadActive(threadID, now)
-	c.requestPoll(threadID, false)
+	c.requestPoll(threadID, false, "send")
 
 	return &bridgev2.MatrixMessageResponse{
 		DB:          pendingMessage,

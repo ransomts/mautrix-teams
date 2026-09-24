@@ -224,7 +224,7 @@ func (c *TeamsClient) longPollLoop(ctx context.Context) error {
 			}
 			// Anything but a message may be a read-position change.
 			receipts := evt.ResourceType != "NewMessage" && evt.ResourceType != "MessageUpdate"
-			c.requestPoll(threadID, receipts)
+			c.requestPoll(threadID, receipts, "longpoll")
 		}
 	}
 }
