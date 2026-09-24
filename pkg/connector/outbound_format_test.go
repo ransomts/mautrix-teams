@@ -54,7 +54,6 @@ func TestIsNonPollableSystemStream(t *testing.T) {
 		"19:teamsstream_drafts_c61ce4d2@thread.v2",
 		"19:teamsstream_annotations_x@thread.v2",
 		"19:teamsstream_notifications_x@thread.v2",
-		"19:teamsstream_calllogs_x@thread.v2",
 		"19:teamsstream_mentions_x@thread.v2",
 		"19:teamsstream_threads_x@thread.v2",
 	}
@@ -65,6 +64,7 @@ func TestIsNonPollableSystemStream(t *testing.T) {
 	}
 	pollable := []string{
 		"19:teamsstream_notes_c61ce4d2@thread.v2", // the self-chat
+		"19:teamsstream_calllogs_x@thread.v2",     // one entry per call
 		"19:abc123@thread.tacv2",                  // a channel
 		"19:a_b@unq.gbl.spaces",                   // a DM
 	}

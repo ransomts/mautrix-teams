@@ -67,7 +67,12 @@ func (c *TeamsClient) convertTeamsMessage(ctx context.Context, portal *bridgev2.
 	}
 	msg = withSubject(msg)
 
-	// Check for call/meeting system events first.
+	// Calls Teams recorded in detail (who, how long, missed or not) first,
+	// then the older generic call/meeting events.
+	if cm := c.convertCall(msg); cm != nil {
+		log.Debug().Str("message_id", msg.MessageID).Msg("Converted as call record")
+		return cm, nil
+	}
 	if cm := convertCallOrMeetingEvent(msg); cm != nil {
 		log.Debug().Str("message_id", msg.MessageID).Msg("Converted as call/meeting event")
 		return cm, nil

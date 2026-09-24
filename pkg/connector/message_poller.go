@@ -271,10 +271,11 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 	if c == nil || th == nil {
 		return 0, nil
 	}
-	// Teams system streams (drafts, annotations, notifications, call logs,
-	// mentions, threads) are not conversations and reject message polling with
-	// HTTP 400 "Invalid threadId". Skip them; "notes" is a real chat and polls
-	// normally.
+	// Teams system streams (drafts, annotations, notifications, mentions,
+	// threads) are not conversations: their entries are bookkeeping, and they
+	// once rejected polling with HTTP 400 "Invalid threadId" (all answer 200
+	// as of 2026-09).  Skip them.  "notes" is a real chat, and the call log
+	// carries one entry per call (see call_log.go), so both poll normally.
 	if isNonPollableSystemStream(th.ThreadID) || isNonPollableSystemStream(th.Conversation) {
 		return 0, nil
 	}
@@ -547,7 +548,9 @@ func (c *TeamsClient) advancePageCursor(ctx context.Context, th *teamsdb.ThreadS
 // that cannot be polled for messages. "teamsstream_notes" (the self-chat) is a
 // real conversation and is excluded.
 func isNonPollableSystemStream(id string) bool {
-	return strings.Contains(id, "teamsstream_") && !strings.Contains(id, "teamsstream_notes")
+	return strings.Contains(id, "teamsstream_") &&
+		!strings.Contains(id, "teamsstream_notes") &&
+		!strings.Contains(id, "teamsstream_calllogs")
 }
 
 // shouldEmitTyping returns true if a typing event should be emitted for this
