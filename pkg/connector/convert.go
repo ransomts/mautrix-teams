@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -19,6 +20,7 @@ import (
 	internalbridge "go.mau.fi/mautrix-teams/internal/bridge"
 	"go.mau.fi/mautrix-teams/internal/teams/graph"
 	"go.mau.fi/mautrix-teams/internal/teams/model"
+	"go.mau.fi/mautrix-teams/pkg/teamsid"
 )
 
 // withSubject puts a channel post's title, when it has one, above the body
@@ -51,6 +53,25 @@ func withSubject(msg model.RemoteMessage) model.RemoteMessage {
 var errDeletedMessage = errors.New("message was deleted on Teams")
 
 func (c *TeamsClient) convertTeamsMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg model.RemoteMessage) (*bridgev2.ConvertedMessage, error) {
+	cm, err := c.convertTeamsMessageContent(ctx, portal, intent, msg)
+	if cm != nil {
+		c.applyForwardHeader(ctx, portal, cm, msg)
+		// Record which edit of the message was bridged, so the poller
+		// does not take a message already bridged as edited for an edit
+		// still to come (see edit_sync.go).
+		editTime := model.ExtractEditTime(msg.PropertiesRaw)
+		for _, part := range cm.Parts {
+			if part != nil && part.DBMetadata == nil {
+				part.DBMetadata = &teamsid.MessageMetadata{EditTime: editTime}
+			}
+		}
+	}
+	return cm, err
+}
+
+// convertTeamsMessageContent converts a Teams message by kind: deleted,
+// call, sticker, media or plain.
+func (c *TeamsClient) convertTeamsMessageContent(ctx context.Context, portal *bridgev2.Portal, intent bridgev2.MatrixAPI, msg model.RemoteMessage) (*bridgev2.ConvertedMessage, error) {
 	log := c.log()
 	log.Trace().
 		Str("message_id", msg.MessageID).
@@ -158,7 +179,7 @@ func (c *TeamsClient) convertTeamsMediaMessage(ctx context.Context, portal *brid
 	}
 
 	// Convert Teams @mentions to Matrix mention pills.
-	c.applyMentionPills(ctx, parts, msg.Mentions)
+	c.applyMentionPills(ctx, parts, msg.Mentions, msg.SenderID)
 
 	applyLinkPreviews(parts, msg.PropertiesRaw)
 
@@ -236,11 +257,17 @@ func (c *TeamsClient) convertTeamsEdit(ctx context.Context, portal *bridgev2.Por
 		content.FormattedBody = formatted
 	}
 
-	// Edit the first text part (usually "caption" or the only part).
-	var targetPart *database.Message
+	// Edit the caption (the text after any media parts), else the first
+	// part, which is the only one for a plain text message.
+	targetPart := existing[0]
 	for _, part := range existing {
-		targetPart = part
-		break
+		if part.PartID == "caption" {
+			targetPart = part
+			break
+		}
+	}
+	if editTime := model.ExtractEditTime(msg.PropertiesRaw); editTime > 0 {
+		targetPart.Metadata = &teamsid.MessageMetadata{EditTime: editTime}
 	}
 
 	return &bridgev2.ConvertedEdit{
@@ -319,7 +346,7 @@ func (c *TeamsClient) convertTeamsMessageLegacy(msg model.RemoteMessage) *bridge
 		Content: content,
 		Extra:   extra,
 	}}
-	c.applyMentionPills(context.Background(), parts, msg.Mentions)
+	c.applyMentionPills(context.Background(), parts, msg.Mentions, msg.SenderID)
 
 	return withRelations(&bridgev2.ConvertedMessage{Parts: parts}, msg)
 }
@@ -640,61 +667,125 @@ func consecutiveItemIDs(prev, next string) bool {
 	return errA == nil && errB == nil && b == a+1
 }
 
+// mentionSelf identifies the bridge user for inbound mentions: a mention of
+// their Teams account pills their own Matrix account (the double puppet)
+// rather than their ghost, so Matrix notifies them.
+type mentionSelf struct {
+	teamsID  string    // the user's Teams MRI
+	mxid     id.UserID // the user's Matrix ID
+	isSender bool      // the message is the user's own
+}
+
 // applyMentionPills replaces Teams @mention display names in message parts
-// with Matrix mention pills (<a href="https://matrix.to/#/@ghost:domain">@Name</a>).
-func (c *TeamsClient) applyMentionPills(ctx context.Context, parts []*bridgev2.ConvertedMessagePart, mentions []model.TeamsMention) {
-	resolver := c.getGhostResolver()
-	applyMentionPillsWithResolver(ctx, parts, mentions, resolver)
+// with Matrix mention pills (<a href="https://matrix.to/#/@ghost:domain">@Name</a>)
+// and lists the mentioned users in the parts' m.mentions.
+func (c *TeamsClient) applyMentionPills(ctx context.Context, parts []*bridgev2.ConvertedMessagePart, mentions []model.TeamsMention, senderID string) {
+	self := mentionSelf{teamsID: model.NormalizeTeamsUserID(c.selfTeamsUserID())}
+	if c.Login != nil {
+		self.mxid = c.Login.UserMXID
+	}
+	self.isSender = self.teamsID != "" && model.NormalizeTeamsUserID(senderID) == self.teamsID
+	applyMentionsWithResolver(ctx, parts, mentions, c.getGhostResolver(), self)
 }
 
 func applyMentionPillsWithResolver(ctx context.Context, parts []*bridgev2.ConvertedMessagePart, mentions []model.TeamsMention, resolver ghostResolver) {
+	applyMentionsWithResolver(ctx, parts, mentions, resolver, mentionSelf{})
+}
+
+// isTeamsUserMRI reports whether a mention's MRI names a person ("8:…"), as
+// opposed to a chat, channel or team ("19:…", for @Everyone and the like)
+// or a tag.
+func isTeamsUserMRI(mri string) bool {
+	return strings.HasPrefix(strings.TrimSpace(mri), "8:")
+}
+
+// applyMentionsWithResolver does the work of applyMentionPills.  A mention
+// of a person becomes a pill; one of the whole chat (@Everyone; @channel and
+// @team also carry a "19:" thread MRI) becomes "@Name" text and a room
+// mention, and also mentions the user directly unless they sent it (a
+// ghost's room mention may lack the power level to notify); any other
+// (a tag) becomes "@Name" text.
+func applyMentionsWithResolver(ctx context.Context, parts []*bridgev2.ConvertedMessagePart, mentions []model.TeamsMention, resolver ghostResolver, self mentionSelf) {
 	if len(mentions) == 0 || resolver == nil {
 		return
 	}
-	// Build replacement map: displayName -> Matrix pill HTML.
-	type pillInfo struct {
-		mxid        id.UserID
-		displayName string
-	}
-	var pills []pillInfo
+	var replacements []string // old, new pairs for one strings.Replacer
+	var userIDs []id.UserID
+	room := false
 	for _, group := range groupSplitMentions(mentions) {
-		if strings.TrimSpace(group.UserID) == "" || strings.TrimSpace(group.DisplayName) == "" {
+		mri := strings.TrimSpace(group.UserID)
+		name := strings.TrimSpace(group.DisplayName)
+		if mri == "" || name == "" {
 			continue
 		}
-		mxid := resolver.resolveGhostMXID(ctx, group.UserID)
-		if mxid == "" {
-			continue
+		var replacement string
+		switch {
+		case isTeamsUserMRI(mri):
+			mxid := resolver.resolveGhostMXID(ctx, mri)
+			if self.mxid != "" && model.NormalizeTeamsUserID(mri) == self.teamsID {
+				mxid = self.mxid
+			}
+			if mxid == "" {
+				continue
+			}
+			userIDs = append(userIDs, mxid)
+			replacement = fmt.Sprintf(`<a href="https://matrix.to/#/%s">@%s</a>`,
+				html.EscapeString(string(mxid)), html.EscapeString(name))
+		case strings.HasPrefix(mri, "19:"):
+			room = true
+			if self.mxid != "" && !self.isSender {
+				userIDs = append(userIDs, self.mxid)
+			}
+			replacement = "@" + html.EscapeString(name)
+		default:
+			replacement = "@" + html.EscapeString(name)
 		}
-		pills = append(pills, pillInfo{mxid: mxid, displayName: group.DisplayName})
+		escapedName := html.EscapeString(name)
+		replacements = append(replacements, escapedName, replacement)
+		// Split names are joined with non-breaking spaces; the text may
+		// have plain ones.
+		if spaced := strings.ReplaceAll(escapedName, "\u00a0", " "); spaced != escapedName {
+			replacements = append(replacements, spaced, replacement)
+		}
 	}
-	if len(pills) == 0 {
+	if len(replacements) == 0 {
 		return
 	}
+	// One pass over the text, so a name is never replaced again inside
+	// the pill that replaced it, longest names first so "Alex Smith" is not
+	// taken for "Alex".
+	pairs := make([][2]string, 0, len(replacements)/2)
+	for i := 0; i < len(replacements); i += 2 {
+		pairs = append(pairs, [2]string{replacements[i], replacements[i+1]})
+	}
+	sort.SliceStable(pairs, func(i, j int) bool { return len(pairs[i][0]) > len(pairs[j][0]) })
+	flat := make([]string, 0, len(replacements))
+	for _, p := range pairs {
+		flat = append(flat, p[0], p[1])
+	}
+	replacer := strings.NewReplacer(flat...)
 
 	for _, part := range parts {
 		if part == nil || part.Content == nil {
 			continue
 		}
-		for _, pill := range pills {
-			pillHTML := fmt.Sprintf(`<a href="https://matrix.to/#/%s">@%s</a>`,
-				html.EscapeString(string(pill.mxid)),
-				html.EscapeString(pill.displayName))
-
-			escapedName := html.EscapeString(pill.displayName)
-			spacedName := strings.ReplaceAll(escapedName, "\u00a0", " ")
-			// Replace in FormattedBody (HTML-escaped display name).
-			if part.Content.FormattedBody != "" {
-				part.Content.FormattedBody = strings.ReplaceAll(part.Content.FormattedBody, escapedName, pillHTML)
-				part.Content.FormattedBody = strings.ReplaceAll(part.Content.FormattedBody, spacedName, pillHTML)
-				if part.Content.Format == "" {
-					part.Content.Format = event.FormatHTML
-				}
-			} else if part.Content.Body != "" {
-				// No formatted body yet — create one with pills.
-				part.Content.FormattedBody = html.EscapeString(part.Content.Body)
-				part.Content.FormattedBody = strings.ReplaceAll(part.Content.FormattedBody, escapedName, pillHTML)
-				part.Content.FormattedBody = strings.ReplaceAll(part.Content.FormattedBody, spacedName, pillHTML)
+		if part.Content.FormattedBody != "" {
+			part.Content.FormattedBody = replacer.Replace(part.Content.FormattedBody)
+			if part.Content.Format == "" {
 				part.Content.Format = event.FormatHTML
+			}
+		} else if part.Content.Body != "" {
+			// No formatted body yet — create one with pills.
+			part.Content.FormattedBody = replacer.Replace(html.EscapeString(part.Content.Body))
+			part.Content.Format = event.FormatHTML
+		}
+		if room || len(userIDs) > 0 {
+			if part.Content.Mentions == nil {
+				part.Content.Mentions = &event.Mentions{}
+			}
+			part.Content.Mentions.Room = part.Content.Mentions.Room || room
+			for _, uid := range userIDs {
+				part.Content.Mentions.Add(uid)
 			}
 		}
 	}

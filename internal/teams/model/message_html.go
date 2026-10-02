@@ -210,6 +210,13 @@ func renderFormattedNode(builder *strings.Builder, node *nethtml.Node) bool {
 				builder.WriteByte('"')
 			}
 		}
+		if tag == "code" {
+			if lang := codeLanguage(node); lang != "" {
+				builder.WriteString(` class="language-`)
+				builder.WriteString(lang)
+				builder.WriteByte('"')
+			}
+		}
 		builder.WriteByte('>')
 
 		for child := node.FirstChild; child != nil; child = child.NextSibling {
@@ -229,6 +236,28 @@ func renderFormattedNode(builder *strings.Builder, node *nethtml.Node) bool {
 		}
 		return rendered
 	}
+}
+
+// codeLanguagePattern matches a "language-X" class and captures X, limited
+// to the characters language names use.
+var codeLanguagePattern = regexp.MustCompile(`(?:^|\s)language-([A-Za-z0-9_+#.-]+)(?:\s|$)`)
+
+// codeLanguage returns the language of a code element: Teams puts it on the
+// enclosing <pre class="language-python">, Matrix wants it on <code>.
+// Teams' default, "plaintext", is no language.
+func codeLanguage(code *nethtml.Node) string {
+	for _, node := range []*nethtml.Node{code, code.Parent} {
+		if node == nil || node.Type != nethtml.ElementNode {
+			continue
+		}
+		if m := codeLanguagePattern.FindStringSubmatch(getAttr(node, "class")); m != nil {
+			if lang := strings.ToLower(m[1]); lang != "plaintext" && lang != "text" {
+				return lang
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 func findWrapperDiv(node *nethtml.Node) *nethtml.Node {

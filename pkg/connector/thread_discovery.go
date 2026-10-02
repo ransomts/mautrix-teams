@@ -40,6 +40,7 @@ func (c *TeamsClient) refreshThreads(ctx context.Context) error {
 	}
 	log.Debug().Int("conversations", len(convs)).Msg("Fetched conversations from Teams")
 	selfID := c.selfTeamsUserID()
+	pins, pinsKnown := c.fetchPinnedChats(ctx)
 
 	for _, conv := range convs {
 		thread, ok := conv.NormalizeForSelf(selfID)
@@ -109,10 +110,24 @@ func (c *TeamsClient) refreshThreads(ctx context.Context) error {
 			chatInfo.Members = members
 		}
 
-		// Discovery runs every 30s; only re-announce a chat whose name, topic
-		// or membership changed (or that we have not announced since startup),
-		// otherwise every pass floods each portal's event queue.
-		sig := chatInfoSignature(chatInfo)
+		// Pinned on Teams -> m.favourite, muted -> push rule, marked
+		// unread -> m.marked_unread; see chat_state.go.
+		userLocal, pinSig := c.chatPinState(thread, pins, pinsKnown)
+		mutedUntil, muteSig := c.chatMuteState(thread, conv.Properties)
+		if mutedUntil != nil {
+			if userLocal == nil {
+				userLocal = &bridgev2.UserLocalPortalInfo{}
+			}
+			userLocal.MutedUntil = mutedUntil
+		}
+		chatInfo.UserLocal = userLocal
+		c.queueMarkedUnread(thread, conv.Properties)
+
+		// Discovery runs every 30s; only re-announce a chat whose name, topic,
+		// membership, pin or mute changed (or that we have not announced
+		// since startup), otherwise every pass floods each portal's event
+		// queue.
+		sig := chatInfoSignature(chatInfo) + pinSig + muteSig
 		prevSig, changed := c.chatInfoChangedWithPrev(thread.ID, sig)
 		if !changed {
 			continue

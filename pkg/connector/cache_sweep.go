@@ -69,6 +69,12 @@ func (c *TeamsClient) sweepCaches(now time.Time) int {
 	removed += sweepBefore(c.reactionSeen, now.Add(-reactionStateTTL), timeOf)
 	c.reactionSeenMu.Unlock()
 
+	// Edit times are refreshed by the same polls; one that comes back
+	// after expiring costs a database lookup, which finds it bridged.
+	c.editSeenMu.Lock()
+	removed += sweepBefore(c.editTimes, now.Add(-reactionStateTTL), stampedSig.seenAt)
+	c.editSeenMu.Unlock()
+
 	c.chatInfoMu.Lock()
 	removed += sweepBefore(c.chatInfoSigs, now.Add(-chatInfoTTL), stampedSig.seenAt)
 	c.chatInfoMu.Unlock()

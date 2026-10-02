@@ -1,6 +1,10 @@
 package model
 
-import "strings"
+import (
+	"encoding/json"
+	"strconv"
+	"strings"
+)
 
 type ThreadProperties struct {
 	OriginalThreadID  string `json:"originalThreadId"`
@@ -29,6 +33,65 @@ type ConversationProperties struct {
 	Title       string `json:"title"`
 	DisplayName string `json:"displayName"`
 	Name        string `json:"name"`
+	// The user's own state of the chat; see Muted and MarkedUnread.
+	Alerts                     LooseString `json:"alerts"`
+	ConsumptionHorizon         LooseString `json:"consumptionhorizon"`
+	ConsumptionHorizonBookmark LooseString `json:"consumptionHorizonBookmark"`
+}
+
+// LooseString decodes a JSON string, number or boolean as its text (and
+// anything else as empty), so one oddly typed property cannot fail the
+// whole conversation list.
+type LooseString string
+
+func (s *LooseString) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		*s = LooseString(str)
+		return nil
+	}
+	var scalar any
+	if err := json.Unmarshal(data, &scalar); err == nil {
+		switch scalar.(type) {
+		case bool, float64:
+			*s = LooseString(strings.TrimSpace(string(data)))
+			return nil
+		}
+	}
+	*s = ""
+	return nil
+}
+
+// Muted reports whether the user muted the chat in Teams, which sets the
+// conversation property alerts to "false" (seen 2026-10-02; meeting chats
+// carry "true").
+func (p ConversationProperties) Muted() bool {
+	return strings.EqualFold(strings.TrimSpace(string(p.Alerts)), "false")
+}
+
+// MarkedUnread reports whether the user marked the chat unread in Teams.
+// That sets consumptionHorizonBookmark ("<msg>;<time marked>;<client id>",
+// the message just before the last one) and leaves the read position,
+// consumptionhorizon ("<msg>;<time read>;<client id>"), alone (seen
+// 2026-10-02).  The mark holds until the chat is read after it: while the
+// bookmark's time is later than the read position's.
+func (p ConversationProperties) MarkedUnread() bool {
+	marked, ok := horizonTime(string(p.ConsumptionHorizonBookmark))
+	if !ok {
+		return false
+	}
+	read, ok := horizonTime(string(p.ConsumptionHorizon))
+	return !ok || marked > read
+}
+
+// horizonTime is the middle field of a consumption horizon or bookmark.
+func horizonTime(value string) (int64, bool) {
+	fields := strings.Split(strings.TrimSpace(value), ";")
+	if len(fields) < 2 {
+		return 0, false
+	}
+	t, err := strconv.ParseInt(strings.TrimSpace(fields[1]), 10, 64)
+	return t, err == nil && t > 0
 }
 
 type RemoteConversation struct {

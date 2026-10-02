@@ -120,6 +120,35 @@ func IsDeleted(properties json.RawMessage) bool {
 	return len(payload.DeleteTime) > 0 || len(payload.HardDeleteTime) > 0
 }
 
+// ExtractEditTime returns a message's properties.edittime (Unix
+// milliseconds), which Teams sets when the message is edited in place, or 0
+// when it was never edited.  Teams sends it as a number; a string is
+// accepted too.
+func ExtractEditTime(properties json.RawMessage) int64 {
+	if len(properties) == 0 {
+		return 0
+	}
+	var payload struct {
+		EditTime json.RawMessage `json:"edittime"`
+	}
+	if err := json.Unmarshal(properties, &payload); err != nil || len(payload.EditTime) == 0 {
+		return 0
+	}
+	var n json.Number
+	if err := json.Unmarshal(payload.EditTime, &n); err != nil {
+		var s string
+		if json.Unmarshal(payload.EditTime, &s) != nil {
+			return 0
+		}
+		n = json.Number(strings.TrimSpace(s))
+	}
+	v, err := n.Int64()
+	if err != nil || v < 0 {
+		return 0
+	}
+	return v
+}
+
 // ExtractSafeLinks returns the URLs in a message's "atp" property: files
 // shared by link, which Teams shows as a file card with no body.
 func ExtractSafeLinks(properties json.RawMessage) []string {

@@ -1,6 +1,9 @@
 package model
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNormalizeMessageBodyHTML(t *testing.T) {
 	content := NormalizeMessageBody("<p>hi</p><p>there<br>friend</p>")
@@ -68,5 +71,24 @@ func TestNormalizeMessageBodyEmoticonWithoutAlt(t *testing.T) {
 	content := NormalizeMessageBody(raw)
 	if content.Body != ":goblin:" {
 		t.Fatalf("unexpected body: %q", content.Body)
+	}
+}
+
+func TestCodeBlockLanguage(t *testing.T) {
+	// The shape of a Teams code snippet (2026-09), with a language picked.
+	raw := `<p itemtype="http://schema.skype.com/CodeBlockEditor" id="x_codeBlockEditor-d7ab">&nbsp;</p><pre class="language-python" itemid="codeBlockEditor-d7ab"><code>print(&quot;hi&quot;)</code></pre>`
+	got := NormalizeMessageBody(raw).FormattedBody
+	if !strings.Contains(got, `<pre><code class="language-python">print(&#34;hi&#34;)</code></pre>`) && !strings.Contains(got, `<pre><code class="language-python">print(&quot;hi&quot;)</code></pre>`) {
+		t.Errorf("formatted body = %q, want the language on <code>", got)
+	}
+	// Teams' default is no language.
+	plain := `<pre class="language-plaintext" itemid="x"><code>ls</code></pre>`
+	if got := NormalizeMessageBody(plain).FormattedBody; strings.Contains(got, "class=") {
+		t.Errorf("formatted body = %q, want no class for plaintext", got)
+	}
+	// Nothing but a language name gets through.
+	evil := `<pre class="language-x&quot;onclick=alert(1)"><code>x</code></pre>`
+	if got := NormalizeMessageBody(evil).FormattedBody; strings.Contains(got, "onclick") {
+		t.Errorf("formatted body = %q", got)
 	}
 }

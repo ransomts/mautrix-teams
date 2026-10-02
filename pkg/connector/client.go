@@ -63,8 +63,15 @@ type TeamsClient struct {
 	reactionSeen   map[string]time.Time  // messageID -> when its reactions were last announced
 	reactionSigs   map[string]stampedSig // messageID -> last announced reaction signature
 
+	editSeenMu sync.Mutex
+	editTimes  map[string]stampedSig // messageID -> last edittime (or "deleted") checked; see edit_sync.go
+
 	chatInfoMu   sync.Mutex
 	chatInfoSigs map[string]stampedSig // threadID -> last announced chat info signature
+
+	pins    stateTracker // pin state of each chat on Teams; see chat_state.go
+	mutes   stateTracker // mute state of each chat on Teams
+	unreads stateTracker // marked-unread state of each chat on Teams
 
 	teamNamesMu sync.Mutex
 	teamNames   map[string]string // teamID -> display name (from Graph teams/channels)

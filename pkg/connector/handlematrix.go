@@ -61,7 +61,7 @@ func (c *TeamsClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 	var err error
 	switch msg.Content.MsgType {
 	case event.MsgText, event.MsgNotice, event.MsgEmote, event.MsgLocation:
-		body, mentionProps := c.outboundTextHTML(msg.Content)
+		body, mentionProps := c.outboundTextHTML(msg.Content, threadID)
 		replyToID := ""
 		if isChannelThread(threadID) {
 			// Teams channel messages are organised into threads. Post the reply
@@ -297,7 +297,7 @@ func (c *TeamsClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.Matrix
 	log.Debug().Str("thread_id", threadID).Str("target_id", teamsMessageID).Msg("Editing Teams message")
 	// The same Teams HTML a new message gets: escaped plain text, the reply
 	// fallback stripped, mention pills as Teams mentions.
-	newBody, mentionProps := c.outboundTextHTML(msg.Content)
+	newBody, mentionProps := c.outboundTextHTML(msg.Content, threadID)
 	err := c.getAPI().EditMessage(ctx, threadID, teamsMessageID, newBody, c.selfTeamsUserID(), mentionProps)
 	if err != nil {
 		log.Warn().Err(err).Str("thread_id", threadID).Str("target_id", teamsMessageID).Msg("Failed to edit Teams message")

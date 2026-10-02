@@ -138,3 +138,20 @@ func TestExtractSafeLinks(t *testing.T) {
 		t.Error("expected no links")
 	}
 }
+
+func TestExtractEditTime(t *testing.T) {
+	cases := map[string]int64{
+		``:                             0,
+		`{}`:                           0,
+		`{"edittime":1790795629563}`:   1790795629563,
+		`{"edittime":"1790795629563"}`: 1790795629563,
+		`{"edittime":"soon"}`:          0,
+		`{"edittime":null}`:            0,
+		`not json`:                     0,
+	}
+	for in, want := range cases {
+		if got := ExtractEditTime(json.RawMessage(in)); got != want {
+			t.Errorf("ExtractEditTime(%q) = %d, want %d", in, got, want)
+		}
+	}
+}

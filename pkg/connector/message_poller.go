@@ -327,8 +327,10 @@ func (c *TeamsClient) pollThread(ctx context.Context, th *teamsdb.ThreadState, n
 		effectiveMessageID := c.effectiveRemoteMessageID(msg)
 		// Filter already-seen messages in case the remote API returns history.
 		if lastSeq != "" && model.CompareSequenceID(strings.TrimSpace(msg.SequenceID), lastSeq) <= 0 {
-			// Still process reactions on older messages for sync parity.
+			// Still process reactions on older messages for sync parity,
+			// and edits and deletes, which Teams makes in place.
 			c.queueReactionSyncForMessage(ctx, th, msg, effectiveMessageID)
+			c.queueInPlaceChange(ctx, th, msg, effectiveMessageID, selfID)
 			continue
 		}
 		if maxSeq == "" || model.CompareSequenceID(strings.TrimSpace(msg.SequenceID), maxSeq) > 0 {

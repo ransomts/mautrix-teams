@@ -21,7 +21,10 @@ type GhostMetadata struct {
 }
 
 type MessageMetadata struct {
-	// Intentionally empty for now.
+	// EditTime is the Teams edittime (Unix ms) of the content bridged for
+	// this part, 0 if it was never edited.  Teams edits in place, so a
+	// newer edittime on a polled message means an edit still to bridge.
+	EditTime int64 `json:"edit_time,omitempty"`
 }
 
 type ReactionMetadata struct {

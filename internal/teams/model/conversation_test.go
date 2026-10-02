@@ -1,6 +1,9 @@
 package model
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestNormalizeMissingID(t *testing.T) {
 	conv := RemoteConversation{
@@ -164,5 +167,42 @@ func TestNormalizeGroupChatInferenceHandlesSelfGhostPair(t *testing.T) {
 	}
 	if thread.RoomName != "Alex" {
 		t.Fatalf("unexpected room name: %q", thread.RoomName)
+	}
+}
+
+func TestConversationUserState(t *testing.T) {
+	// The Boyer DM before and after "Mark as unread" and "Mute" (2026-10-02).
+	var conv RemoteConversation
+	raw := `{"id":"19:a_b@unq.gbl.spaces","properties":{"consumptionhorizon":"1790788892511;1790788892662;1790788892467","consumptionHorizonBookmark":"1790788892510;1790947736042;1790788892467","alerts":"false","isemptyconversation":"False"}}`
+	if err := json.Unmarshal([]byte(raw), &conv); err != nil {
+		t.Fatal(err)
+	}
+	if !conv.Properties.Muted() || !conv.Properties.MarkedUnread() {
+		t.Errorf("muted %v unread %v, want both", conv.Properties.Muted(), conv.Properties.MarkedUnread())
+	}
+
+	cases := []struct {
+		props       ConversationProperties
+		muted, unrd bool
+	}{
+		{ConversationProperties{}, false, false},
+		{ConversationProperties{Alerts: "true"}, false, false},
+		// Read again after the mark: the read position is later.
+		{ConversationProperties{ConsumptionHorizon: "5;300;x", ConsumptionHorizonBookmark: "4;200;x"}, false, false},
+		{ConversationProperties{ConsumptionHorizonBookmark: ""}, false, false},
+		{ConversationProperties{ConsumptionHorizonBookmark: "4;200;x"}, false, true},
+	}
+	for i, tc := range cases {
+		if tc.props.Muted() != tc.muted || tc.props.MarkedUnread() != tc.unrd {
+			t.Errorf("case %d: muted %v unread %v", i, tc.props.Muted(), tc.props.MarkedUnread())
+		}
+	}
+
+	// An oddly typed property does not fail the list.
+	if err := json.Unmarshal([]byte(`{"properties":{"alerts":false,"consumptionhorizon":{"x":1}}}`), &conv); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !conv.Properties.Muted() || conv.Properties.ConsumptionHorizon != "" {
+		t.Errorf("got %+v", conv.Properties)
 	}
 }
