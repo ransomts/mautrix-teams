@@ -3,13 +3,11 @@ package graph
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
-
-	"github.com/rs/zerolog"
 
 	teamsclient "go.mau.fi/mautrix-teams/internal/teams/client"
 )
@@ -22,7 +20,7 @@ type GraphDriveItemContentError struct {
 }
 
 func (e GraphDriveItemContentError) Error() string {
-	return "graph drive item content request failed"
+	return fmt.Sprintf("graph drive item content request failed: status %d: %s", e.Status, e.BodySnippet)
 }
 
 type DriveItemContent struct {
@@ -42,32 +40,19 @@ func (c *GraphClient) DownloadDriveItemContent(ctx context.Context, driveItemID 
 		return nil, ErrEmptyDownloadDriveItemID
 	}
 
-	endpoint := "https://graph.microsoft.com/v1.0/me/drive/items/" + url.PathEscape(driveItemID) + "/content"
+	return c.downloadContent(ctx, "https://graph.microsoft.com/v1.0/me/drive/items/"+url.PathEscape(driveItemID)+"/content")
+}
+
+// downloadContent GETs a Graph content endpoint, which redirects to a
+// pre-authenticated download URL, and reads the body up to the upload cap.
+func (c *GraphClient) downloadContent(ctx context.Context, endpoint string) (*DriveItemContent, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(c.AccessToken))
 
-	executor := c.Executor
-	if executor == nil {
-		executor = &teamsclient.TeamsRequestExecutor{
-			HTTP:        c.HTTP,
-			Log:         zerolog.Nop(),
-			MaxRetries:  4,
-			BaseBackoff: 500 * time.Millisecond,
-			MaxBackoff:  10 * time.Second,
-		}
-		c.Executor = executor
-	}
-	if executor.HTTP == nil {
-		executor.HTTP = c.HTTP
-	}
-	if c.Log != nil {
-		executor.Log = *c.Log
-	}
-
-	resp, err := executor.Do(ctx, req, classifyDriveItemContentResponse)
+	resp, err := c.executor().Do(ctx, req, classifyDriveItemContentResponse)
 	if err != nil {
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()

@@ -17,8 +17,6 @@ import (
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 
-	internalbridge "go.mau.fi/mautrix-teams/internal/bridge"
-	"go.mau.fi/mautrix-teams/internal/teams/graph"
 	"go.mau.fi/mautrix-teams/internal/teams/model"
 	"go.mau.fi/mautrix-teams/pkg/teamsid"
 )
@@ -108,19 +106,20 @@ func (c *TeamsClient) convertTeamsMessageContent(ctx context.Context, portal *br
 	}
 
 	attachments, _ := model.ParseAttachments(msg.PropertiesFiles)
-	hasDriveItemID := false
+	// Any attachment with a drive item or a sharing link can be fetched.
+	hasFetchable := false
 	for _, att := range attachments {
-		if strings.TrimSpace(att.DriveItemID) != "" {
-			hasDriveItemID = true
+		if strings.TrimSpace(att.DriveItemID) != "" || strings.TrimSpace(att.ShareURL) != "" {
+			hasFetchable = true
 			break
 		}
 	}
 	hasInlineImages := len(msg.InlineImages) > 0
 	hasGIFs := len(msg.GIFs) > 0
-	if (!hasDriveItemID && !hasInlineImages && !hasGIFs) || intent == nil || c == nil {
+	if (!hasFetchable && !hasInlineImages && !hasGIFs) || intent == nil || c == nil {
 		log.Debug().
 			Str("message_id", msg.MessageID).
-			Bool("has_drive_item", hasDriveItemID).
+			Bool("has_attachments", hasFetchable).
 			Bool("has_inline_images", hasInlineImages).
 			Bool("has_gifs", hasGIFs).
 			Bool("intent_nil", intent == nil).
@@ -131,7 +130,7 @@ func (c *TeamsClient) convertTeamsMessageContent(ctx context.Context, portal *br
 }
 
 // convertTeamsMediaMessage converts a message that carries media to
-// re-upload (drive-item attachments, inline images or GIF-picker GIFs): the
+// re-upload (attachments, inline images or GIF-picker GIFs): the
 // media parts first, then the body as a caption part.  If nothing survives
 // it returns a placeholder rather than dropping the message.  Mention pills,
 // link previews and the thread/reply relations are applied to the result.
@@ -349,102 +348,6 @@ func (c *TeamsClient) convertTeamsMessageLegacy(msg model.RemoteMessage) *bridge
 	c.applyMentionPills(context.Background(), parts, msg.Mentions, msg.SenderID)
 
 	return withRelations(&bridgev2.ConvertedMessage{Parts: parts}, msg)
-}
-
-func (c *TeamsClient) reuploadInboundAttachments(
-	ctx context.Context,
-	roomID id.RoomID,
-	intent bridgev2.MatrixAPI,
-	attachments []model.TeamsAttachment,
-	extra map[string]any,
-) (mediaParts []*bridgev2.ConvertedMessagePart, fallback []model.TeamsAttachment) {
-	log := c.log()
-	httpClient := c.getConsumerHTTP()
-	if httpClient == nil {
-		return nil, attachments
-	}
-	log.Debug().Int("attachments", len(attachments)).Msg("Processing inbound attachments")
-
-	skypeToken := ""
-	regionAmsURL := ""
-	if c.Meta != nil {
-		skypeToken = strings.TrimSpace(c.skypeToken())
-		regionAmsURL = c.regionAmsURL()
-	}
-
-	// Try to get Graph client for DriveItemID-based downloads.
-	var gc *graph.GraphClient
-	if err := c.ensureValidGraphToken(ctx); err == nil {
-		if graphToken, err := c.graphAccessToken(); err == nil {
-			gc = graph.NewClient(httpClient)
-			gc.AccessToken = graphToken
-			gc.MaxUploadSize = internalbridge.MaxAttachmentBytesV0
-			if c.Login != nil {
-				gc.Log = &c.Login.Log
-			}
-		}
-	}
-
-	for i, att := range attachments {
-		driveItemID := strings.TrimSpace(att.DriveItemID)
-		if driveItemID == "" {
-			// No DriveItemID: try AMS download via DownloadURL if available.
-			downloadURL := strings.TrimSpace(att.DownloadURL)
-			if downloadURL != "" && skypeToken != "" {
-				if regionAmsURL != "" {
-					downloadURL = rewriteAMSURL(downloadURL, regionAmsURL)
-				}
-				data, contentType, dlErr := downloadAMSImage(ctx, httpClient, downloadURL, skypeToken)
-				if dlErr == nil && len(data) > 0 {
-					mimeType := detectMIMEType(att.Filename, contentType, data)
-					msgType := matrixMsgTypeForMIME(mimeType)
-					mxc, file, upErr := intent.UploadMedia(ctx, roomID, data, strings.TrimSpace(att.Filename), mimeType)
-					if upErr == nil {
-						part := &bridgev2.ConvertedMessagePart{
-							ID:      networkid.PartID(fmt.Sprintf("att_%d", i)),
-							Type:    event.EventMessage,
-							Extra:   cloneExtra(extra),
-							Content: buildMediaContent(msgType, strings.TrimSpace(att.Filename), mimeType, len(data), mxc, file),
-						}
-						mediaParts = append(mediaParts, part)
-						continue
-					}
-				}
-			}
-			fallback = append(fallback, att)
-			continue
-		}
-
-		if gc == nil {
-			fallback = append(fallback, att)
-			continue
-		}
-		content, err := gc.DownloadDriveItemContent(ctx, driveItemID)
-		if err != nil || content == nil || len(content.Bytes) == 0 {
-			fallback = append(fallback, att)
-			continue
-		}
-
-		mimeType := detectMIMEType(att.Filename, content.ContentType, content.Bytes)
-		msgType := matrixMsgTypeForMIME(mimeType)
-
-		mxc, file, err := intent.UploadMedia(ctx, roomID, content.Bytes, strings.TrimSpace(att.Filename), mimeType)
-		if err != nil {
-			fallback = append(fallback, att)
-			continue
-		}
-
-		part := &bridgev2.ConvertedMessagePart{
-			ID:      networkid.PartID(fmt.Sprintf("att_%d", i)),
-			Type:    event.EventMessage,
-			Extra:   cloneExtra(extra),
-			Content: buildMediaContent(msgType, strings.TrimSpace(att.Filename), mimeType, len(content.Bytes), mxc, file),
-		}
-		applyVoiceMessageHint(part, att.Filename, mimeType)
-		mediaParts = append(mediaParts, part)
-	}
-
-	return mediaParts, fallback
 }
 
 // applyVoiceMessageHint sets the MSC3245 voice message extension on audio parts
