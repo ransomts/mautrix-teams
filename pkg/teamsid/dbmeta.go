@@ -13,7 +13,18 @@ import (
 // backward-compatible. Keep fields optional and additive.
 
 type PortalMetadata struct {
-	// Intentionally empty for now.
+	// Directory is what the directory last said about a DM's other member,
+	// as sent to the room in a fi.mau.teams.directory state event.  Nil
+	// until the first lookup.
+	Directory *DirectoryInfo `json:"directory,omitempty"`
+}
+
+// DirectoryInfo is a DM counterpart's directory job title and department.
+type DirectoryInfo struct {
+	JobTitle   string `json:"job_title"`
+	Department string `json:"department"`
+	// CheckedAt is when the directory was last asked (Unix ms).
+	CheckedAt int64 `json:"checked_at"`
 }
 
 type GhostMetadata struct {

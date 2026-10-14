@@ -14,6 +14,8 @@ func TestGetUserByEmail(t *testing.T) {
 		DisplayName:       "Test User",
 		Mail:              "test@example.com",
 		UserPrincipalName: "test@example.com",
+		JobTitle:          "Senior Lecturer",
+		Department:        "SoC - School of Computing",
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-token" {
@@ -48,6 +50,9 @@ func TestGetUserByEmail(t *testing.T) {
 	}
 	if result.DisplayName != "Test User" {
 		t.Errorf("expected DisplayName='Test User', got '%s'", result.DisplayName)
+	}
+	if result.JobTitle != "Senior Lecturer" || result.Department != "SoC - School of Computing" {
+		t.Errorf("expected job title and department, got %q, %q", result.JobTitle, result.Department)
 	}
 }
 

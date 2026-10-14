@@ -73,6 +73,8 @@ func (c *TeamsClient) pollDueThreads(ctx context.Context, initialDiscoverySuccee
 	sched := &pollSchedule{lastSeen: make(map[string]string)}
 	if initialDiscoverySucceeded {
 		sched.nextDiscovery = time.Now().UTC().Add(c.discoveryInterval())
+		// The full sync just brought the teams over.
+		sched.nextTeamSync = time.Now().UTC().Add(teamSyncInterval)
 	}
 	for {
 		if ctx.Err() != nil {
@@ -118,8 +120,11 @@ func (c *TeamsClient) pollDueThreads(ctx context.Context, initialDiscoverySuccee
 // pollSchedule is the poll loop's timing state between passes.
 type pollSchedule struct {
 	nextDiscovery, lastDiscovery time.Time
-	nextActivity                 time.Time
-	activityFailures             int
+	// nextTeamSync is when newly joined teams and new DMs' directory
+	// info are next looked for.
+	nextTeamSync     time.Time
+	nextActivity     time.Time
+	activityFailures int
 	// nextSweep is when the client's caches are next swept.
 	nextSweep time.Time
 	// nextStats is when the request tally is next logged.
@@ -155,6 +160,11 @@ func (c *TeamsClient) pollPass(ctx context.Context, now time.Time, states map[st
 		}
 		sched.lastDiscovery = now
 		sched.nextDiscovery = now.Add(c.discoveryInterval())
+	}
+	if !now.Before(sched.nextTeamSync) {
+		c.syncTeams(ctx)
+		c.syncDMDirectoryInfo(ctx)
+		sched.nextTeamSync = now.Add(teamSyncInterval)
 	}
 	if !now.Before(sched.nextActivity) {
 		c.runActivityCheck(ctx, now, states, sched)

@@ -16,6 +16,8 @@ type GraphUser struct {
 	DisplayName       string `json:"displayName"`
 	Mail              string `json:"mail"`
 	UserPrincipalName string `json:"userPrincipalName"`
+	JobTitle          string `json:"jobTitle"`
+	Department        string `json:"department"`
 }
 
 // GetUserByEmail looks up a user by email address (or UPN) via the Graph API.
@@ -31,7 +33,7 @@ func (c *GraphClient) GetUserByEmail(ctx context.Context, email string) (*GraphU
 		return nil, fmt.Errorf("empty email address")
 	}
 
-	endpoint := "https://graph.microsoft.com/v1.0/users/" + url.PathEscape(email) + "?$select=id,displayName,mail,userPrincipalName"
+	endpoint := "https://graph.microsoft.com/v1.0/users/" + url.PathEscape(email) + "?$select=id,displayName,mail,userPrincipalName,jobTitle,department"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err

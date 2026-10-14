@@ -18,7 +18,11 @@ import (
 
 const (
 	threadDiscoveryInterval = 30 * time.Second
-	selfMessageTTL          = 5 * time.Minute
+	// teamSyncInterval is how often the poll loop looks for newly joined
+	// teams (and new channels' names and parents) and new DMs' directory
+	// info between full syncs.
+	teamSyncInterval = time.Hour
+	selfMessageTTL   = 5 * time.Minute
 	// longPollRetryDelay is how long to wait after a failed long-poll request.
 	longPollRetryDelay = 2 * time.Second
 	// longPollMaxRetryDelay caps the backoff between failed long-poll requests.
@@ -270,20 +274,31 @@ func (c *TeamsClient) syncOnce(ctx context.Context) error {
 	}
 	log.Debug().Msg("Resolving unnamed group chats")
 	c.resolveUnnamedGroupChats(ctx)
+	log.Debug().Msg("Repairing team spaces")
+	c.repairTeamSpaces(ctx)
+	c.syncTeams(ctx)
+	log.Debug().Msg("Syncing DM directory info")
+	c.syncDMDirectoryInfo(ctx)
+	log.Info().Msg("Full sync cycle complete")
+	return nil
+}
+
+// syncTeams brings the user's teams and channels over: a space for each team
+// (a newly joined one included), structured channel names and channel
+// parents. It runs on every full sync and every teamSyncInterval from the
+// poll loop, since thread discovery alone never creates a team's space.
+func (c *TeamsClient) syncTeams(ctx context.Context) {
+	log := zerolog.Ctx(ctx)
 	// Fetch the team/channel map once and reuse it for both space naming and
 	// structured room names, so team spaces can be named even when
 	// me/joinedTeams is inconsistent with the channels the user actually sees.
 	channelMap := c.fetchTeamChannelMap(ctx)
-	log.Debug().Msg("Repairing team spaces")
-	c.repairTeamSpaces(ctx)
 	log.Debug().Msg("Syncing team spaces")
 	c.syncTeamSpaces(ctx, channelMap)
 	log.Debug().Msg("Applying structured room names")
 	c.applyStructuredRoomNames(ctx, channelMap)
 	log.Debug().Msg("Syncing channel parents")
 	c.syncChannelParents(ctx, channelMap)
-	log.Info().Msg("Full sync cycle complete")
-	return nil
 }
 
 // refreshFailure remembers a failed token refresh so that the many callers of
