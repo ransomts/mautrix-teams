@@ -235,6 +235,8 @@ func (c *TeamsClient) longPollLoop(ctx context.Context) error {
 func (c *TeamsClient) presenceLoop(ctx context.Context) {
 	ticker := time.NewTicker(presencePollInterval)
 	defer ticker.Stop()
+	keepAlive := time.NewTicker(presenceKeepAliveInterval)
+	defer keepAlive.Stop()
 
 	// Initial poll after a short delay to let thread discovery populate known users.
 	select {
@@ -252,11 +254,12 @@ func (c *TeamsClient) presenceLoop(ctx context.Context) {
 			if c.superseded() {
 				return
 			}
-			if c.Meta != nil {
-				if graphToken, err := c.graphAccessToken(); err == nil && graphToken != "" {
-					c.pollPresence(ctx)
-				}
+			c.pollPresence(ctx)
+		case <-keepAlive.C:
+			if c.superseded() {
+				return
 			}
+			c.keepPresenceAlive(ctx)
 		}
 	}
 }

@@ -3,6 +3,8 @@ package connector
 import (
 	"context"
 	"errors"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -10,32 +12,110 @@ import (
 	"maunium.net/go/mautrix/bridgev2/matrix"
 	"maunium.net/go/mautrix/event"
 
-	"go.mau.fi/mautrix-teams/internal/teams/graph"
+	"go.mau.fi/mautrix-teams/internal/teams/presence"
 )
 
 const presencePollInterval = 60 * time.Second
 
-// mapTeamsPresence converts a Teams availability string to a Matrix presence and status message.
-func mapTeamsPresence(availability string) (event.Presence, string) {
+// presenceKeepAliveInterval is how often the presence of everyone not
+// offline is sent again.  Synapse sets a user offline 30 seconds after
+// their last sync or presence update (SYNC_ONLINE_TIMEOUT), and ghosts
+// never sync, so a presence sent once would last half a minute.
+const presenceKeepAliveInterval = 20 * time.Second
+
+// presenceBatchSize is how many users one presence request asks about.
+const presenceBatchSize = 100
+
+// mapTeamsPresence converts a Teams availability and activity to a Matrix
+// presence and status message.  Matrix has only online, unavailable and
+// offline, so the status message carries what Teams says beyond that.
+func mapTeamsPresence(availability, activity string) (event.Presence, string) {
+	var p event.Presence
+	var status string
 	switch availability {
 	case "Available":
-		return event.PresenceOnline, ""
-	case "Busy":
-		return event.PresenceOnline, "Busy"
+		p = event.PresenceOnline
+	case "Busy", "BusyIdle":
+		p, status = event.PresenceOnline, "Busy"
 	case "DoNotDisturb":
-		return event.PresenceUnavailable, "Do Not Disturb"
-	case "Away":
-		return event.PresenceUnavailable, "Away"
+		p, status = event.PresenceUnavailable, "Do Not Disturb"
+	case "Away", "AvailableIdle":
+		p, status = event.PresenceUnavailable, "Away"
 	case "BeRightBack":
-		return event.PresenceUnavailable, "Be Right Back"
-	case "Offline":
-		return event.PresenceOffline, ""
+		p, status = event.PresenceUnavailable, "Be Right Back"
 	default:
-		return event.PresenceOffline, ""
+		p = event.PresenceOffline
 	}
+	switch activity {
+	case "InAMeeting":
+		status = "In a meeting"
+	case "InACall", "InAConferenceCall":
+		status = "In a call"
+	case "Presenting":
+		status = "Presenting"
+	case "OutOfOffice":
+		status = "Out of office"
+	}
+	return p, status
 }
 
-// pollPresence fetches presence for known ghost users and pushes updates to Matrix.
+// ensurePresenceToken returns a token for the Teams presence service,
+// refreshing it from the login's refresh token when it is missing or about
+// to expire.  It lives only in memory: one refresh an hour is cheap.
+func (c *TeamsClient) ensurePresenceToken(ctx context.Context) (string, bool, error) {
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	if c.superseded() {
+		return "", false, errClientSuperseded
+	}
+	now := time.Now().UTC()
+	if c.presenceToken != "" && now.Add(5*time.Minute).Before(c.presenceTokenExpiry) {
+		return c.presenceToken, false, nil
+	}
+	if err := c.presenceRefreshFail.blocked(now); err != nil {
+		return "", false, err
+	}
+	refreshToken := strings.TrimSpace(c.Meta.RefreshToken)
+	if refreshToken == "" {
+		return "", false, errors.New("missing refresh token for presence token")
+	}
+	authClient := *newConfiguredAuthClientForLogin(c.Main, c.Meta)
+	authClient.Scopes = []string{presence.Scope, "openid", "profile", "offline_access"}
+	refreshed, err := authClient.RefreshAccessToken(ctx, refreshToken)
+	if err != nil {
+		c.presenceRefreshFail.record(now, err)
+		return "", false, err
+	}
+	c.presenceRefreshFail.reset()
+	c.presenceToken = strings.TrimSpace(refreshed.AccessToken)
+	c.presenceTokenExpiry = refreshed.Expiry()
+	if rt := strings.TrimSpace(refreshed.RefreshToken); rt != "" && rt != c.Meta.RefreshToken {
+		c.Meta.RefreshToken = rt
+		if err := c.saveLogin(ctx); err != nil {
+			zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to save refresh token from presence token refresh")
+		}
+	}
+	return c.presenceToken, true, nil
+}
+
+// presenceRequest is mautrix.ReqPresence without omitempty on the status
+// message: Synapse keeps the previous message when the field is left out,
+// so going from "In a meeting" to plain Available or Offline must send "".
+type presenceRequest struct {
+	Presence  event.Presence `json:"presence"`
+	StatusMsg string         `json:"status_msg"`
+}
+
+// setPresence sets cli's user's presence and status message, an empty
+// message clearing the old one.
+func setPresence(ctx context.Context, cli *mautrix.Client, p event.Presence, statusMsg string) error {
+	u := cli.BuildClientURL("v3", "presence", cli.UserID, "status")
+	_, err := cli.MakeRequest(ctx, http.MethodPut, u, presenceRequest{Presence: p, StatusMsg: statusMsg}, nil)
+	return err
+}
+
+// pollPresence fetches presence for known ghost users from the Teams
+// presence service and pushes changes to Matrix.
 func (c *TeamsClient) pollPresence(ctx context.Context) {
 	if c == nil || c.Meta == nil || c.Login == nil || c.Main == nil || c.Main.Bridge == nil {
 		return
@@ -45,12 +125,9 @@ func (c *TeamsClient) pollPresence(ctx context.Context) {
 	}
 	log := zerolog.Ctx(ctx)
 
-	if err := c.ensureValidGraphToken(ctx); err != nil {
-		log.Debug().Err(err).Msg("Skipping presence poll: no valid graph token")
-		return
-	}
-	graphToken, err := c.graphAccessToken()
-	if err != nil || graphToken == "" {
+	token, fresh, err := c.ensurePresenceToken(ctx)
+	if err != nil {
+		log.Debug().Err(err).Msg("Skipping presence poll: no presence token")
 		return
 	}
 
@@ -58,76 +135,102 @@ func (c *TeamsClient) pollPresence(ctx context.Context) {
 	// member list, so knownUsers would otherwise stay empty.
 	c.seedKnownUsersFromProfiles(ctx)
 
-	// Collect known user IDs.
+	// The service takes MRIs; only organisation users have presence.
 	c.knownUsersMu.Lock()
-	if len(c.knownUsers) == 0 {
-		c.knownUsersMu.Unlock()
-		return
-	}
-	userIDs := make([]string, 0, len(c.knownUsers))
+	mris := make([]string, 0, len(c.knownUsers))
 	for uid := range c.knownUsers {
-		userIDs = append(userIDs, uid)
+		if strings.HasPrefix(uid, "8:orgid:") {
+			mris = append(mris, uid)
+		}
 	}
 	c.knownUsersMu.Unlock()
+	if len(mris) == 0 {
+		return
+	}
 
 	httpClient := c.getConsumerHTTP()
 	if httpClient == nil {
 		return
 	}
-	gc := graph.NewClient(httpClient)
-	gc.AccessToken = graphToken
+	pc := &presence.Client{HTTP: httpClient, Token: token}
 
-	// Batch limit is 650 per call.
-	const batchLimit = 650
-	for i := 0; i < len(userIDs); i += batchLimit {
-		end := i + batchLimit
-		if end > len(userIDs) {
-			end = len(userIDs)
-		}
-		batch := userIDs[i:end]
-
-		presenceMap, err := gc.GetBatchPresence(ctx, batch)
-		if err != nil {
-			if errors.Is(err, graph.ErrPresenceForbidden) {
+	for i := 0; i < len(mris); i += presenceBatchSize {
+		batch := mris[i:min(i+presenceBatchSize, len(mris))]
+		states, err := pc.Get(ctx, batch)
+		if errors.Is(err, presence.ErrUnauthorized) {
+			if fresh {
+				// A token issued just now and rejected: the service will not
+				// take this login's tokens, so stop asking.
 				if c.presenceForbidden.CompareAndSwap(false, true) {
-					log.Info().Msg("Presence polling disabled: tenant has not consented Presence.Read.All for this client")
+					log.Info().Msg("Presence polling disabled: the Teams presence service rejects this login's token")
 				}
-				return
+			} else {
+				c.tokenMu.Lock()
+				c.presenceToken = ""
+				c.tokenMu.Unlock()
 			}
-			log.Debug().Err(err).Msg("Presence batch request failed")
+			return
+		}
+		if err != nil {
+			log.Debug().Err(err).Msg("Presence request failed")
 			continue
 		}
 
 		c.presenceMu.Lock()
 		if c.presenceCache == nil {
-			c.presenceCache = make(map[string]string)
+			c.presenceCache = make(map[string]presence.Presence)
 		}
-		for uid, p := range presenceMap {
-			if p == nil {
+		for uid, p := range states {
+			if prev, ok := c.presenceCache[uid]; ok && prev == p {
 				continue
 			}
-			prev, hasPrev := c.presenceCache[uid]
-			if hasPrev && prev == p.Availability {
-				continue
-			}
-			c.presenceCache[uid] = p.Availability
-
-			matrixPresence, statusMsg := mapTeamsPresence(p.Availability)
-			ghost, err := c.Main.Bridge.GetGhostByID(ctx, teamsUserIDToNetworkUserID(uid))
-			if err != nil || ghost == nil {
-				continue
-			}
-			// bridgev2.MatrixAPI doesn't expose SetPresence, so we type-assert
-			// to the concrete matrix.ASIntent to access the raw mautrix client.
-			if asIntent, ok := ghost.Intent.(*matrix.ASIntent); ok {
-				_ = asIntent.Matrix.SetPresence(ctx, mautrix.ReqPresence{
-					Presence:  matrixPresence,
-					StatusMsg: statusMsg,
-				})
+			c.presenceCache[uid] = p
+			if err := c.pushGhostPresence(ctx, uid, p); err != nil {
+				log.Debug().Err(err).Str("user_id", uid).Msg("Failed to set ghost presence")
+				delete(c.presenceCache, uid)
 			}
 		}
 		c.presenceMu.Unlock()
 	}
+}
+
+// keepPresenceAlive sends again the presence of every ghost not offline,
+// before Synapse times it out (see presenceKeepAliveInterval).
+func (c *TeamsClient) keepPresenceAlive(ctx context.Context) {
+	if c == nil || c.Main == nil || c.Main.Bridge == nil {
+		return
+	}
+	c.presenceMu.Lock()
+	defer c.presenceMu.Unlock()
+	for uid, p := range c.presenceCache {
+		if mp, _ := mapTeamsPresence(p.Availability, p.Activity); mp == event.PresenceOffline {
+			continue
+		}
+		if err := c.pushGhostPresence(ctx, uid, p); err != nil {
+			zerolog.Ctx(ctx).Debug().Err(err).Str("user_id", uid).Msg("Failed to refresh ghost presence")
+			// Sent afresh by the next poll.
+			delete(c.presenceCache, uid)
+		}
+	}
+}
+
+// pushGhostPresence sets the Matrix presence of uid's ghost from Teams presence p.
+func (c *TeamsClient) pushGhostPresence(ctx context.Context, uid string, p presence.Presence) error {
+	ghost, err := c.Main.Bridge.GetGhostByID(ctx, teamsUserIDToNetworkUserID(uid))
+	if err != nil {
+		return err
+	}
+	if ghost == nil {
+		return errors.New("no ghost")
+	}
+	// bridgev2.MatrixAPI doesn't expose presence, so we type-assert to the
+	// concrete matrix.ASIntent to access the raw mautrix client.
+	asIntent, ok := ghost.Intent.(*matrix.ASIntent)
+	if !ok {
+		return nil
+	}
+	matrixPresence, statusMsg := mapTeamsPresence(p.Availability, p.Activity)
+	return setPresence(ctx, asIntent.Matrix.Client, matrixPresence, statusMsg)
 }
 
 // seedKnownUsersFromProfiles loads every profile's Teams user ID into the

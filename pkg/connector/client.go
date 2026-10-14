@@ -23,6 +23,7 @@ import (
 	consumerclient "go.mau.fi/mautrix-teams/internal/teams/client"
 	"go.mau.fi/mautrix-teams/internal/teams/graph"
 	"go.mau.fi/mautrix-teams/internal/teams/model"
+	"go.mau.fi/mautrix-teams/internal/teams/presence"
 	"go.mau.fi/mautrix-teams/pkg/teamsid"
 )
 
@@ -44,7 +45,11 @@ type TeamsClient struct {
 	tokenMu          sync.Mutex
 	skypeRefreshFail refreshFailure
 	graphRefreshFail refreshFailure
-	badCreds         badCredentials // see client_lifecycle.go
+	// The Teams presence service's token, kept in memory only; see presence.go.
+	presenceToken       string
+	presenceTokenExpiry time.Time
+	presenceRefreshFail refreshFailure
+	badCreds            badCredentials // see client_lifecycle.go
 
 	consumerHTTPMu sync.Mutex
 	consumerHTTP   *http.Client
@@ -90,8 +95,8 @@ type TeamsClient struct {
 	selfMessages  map[string]time.Time
 
 	presenceMu        sync.Mutex
-	presenceCache     map[string]string // userID -> last known availability
-	presenceForbidden atomic.Bool       // set when the tenant denies presence (403)
+	presenceCache     map[string]presence.Presence // userID -> last known presence
+	presenceForbidden atomic.Bool                  // set when the presence service rejects a fresh token
 
 	knownUsersMu sync.Mutex
 	knownUsers   map[string]struct{}

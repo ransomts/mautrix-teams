@@ -1,7 +1,16 @@
 package connector
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/id"
+
+	"go.mau.fi/mautrix-teams/internal/teams/presence"
 
 	"maunium.net/go/mautrix/event"
 )
@@ -9,22 +18,28 @@ import (
 func TestMapTeamsPresence(t *testing.T) {
 	tests := []struct {
 		availability  string
+		activity      string
 		wantPresence  event.Presence
 		wantStatusMsg string
 	}{
-		{"Available", event.PresenceOnline, ""},
-		{"Busy", event.PresenceOnline, "Busy"},
-		{"DoNotDisturb", event.PresenceUnavailable, "Do Not Disturb"},
-		{"Away", event.PresenceUnavailable, "Away"},
-		{"BeRightBack", event.PresenceUnavailable, "Be Right Back"},
-		{"Offline", event.PresenceOffline, ""},
-		{"Unknown", event.PresenceOffline, ""},
-		{"", event.PresenceOffline, ""},
+		{"Available", "Available", event.PresenceOnline, ""},
+		{"Busy", "Busy", event.PresenceOnline, "Busy"},
+		{"Busy", "InAMeeting", event.PresenceOnline, "In a meeting"},
+		{"Busy", "InACall", event.PresenceOnline, "In a call"},
+		{"DoNotDisturb", "Presenting", event.PresenceUnavailable, "Presenting"},
+		{"DoNotDisturb", "DoNotDisturb", event.PresenceUnavailable, "Do Not Disturb"},
+		{"Away", "Away", event.PresenceUnavailable, "Away"},
+		{"AvailableIdle", "Inactive", event.PresenceUnavailable, "Away"},
+		{"BeRightBack", "BeRightBack", event.PresenceUnavailable, "Be Right Back"},
+		{"Offline", "Offline", event.PresenceOffline, ""},
+		{"Offline", "OutOfOffice", event.PresenceOffline, "Out of office"},
+		{"PresenceUnknown", "", event.PresenceOffline, ""},
+		{"", "", event.PresenceOffline, ""},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.availability, func(t *testing.T) {
-			presence, statusMsg := mapTeamsPresence(tt.availability)
+		t.Run(tt.availability+"/"+tt.activity, func(t *testing.T) {
+			presence, statusMsg := mapTeamsPresence(tt.availability, tt.activity)
 			if presence != tt.wantPresence {
 				t.Errorf("mapTeamsPresence(%q) presence = %s, want %s", tt.availability, presence, tt.wantPresence)
 			}
@@ -62,19 +77,42 @@ func TestTrackKnownUser_Empty(t *testing.T) {
 
 func TestPresenceCache(t *testing.T) {
 	c := &TeamsClient{
-		presenceCache: make(map[string]string),
+		presenceCache: make(map[string]presence.Presence),
 	}
 
 	// First update should be recorded.
 	c.presenceMu.Lock()
-	c.presenceCache["user-1"] = "Available"
+	c.presenceCache["user-1"] = presence.Presence{Availability: "Available"}
 	c.presenceMu.Unlock()
 
 	c.presenceMu.Lock()
 	prev, hasPrev := c.presenceCache["user-1"]
 	c.presenceMu.Unlock()
 
-	if !hasPrev || prev != "Available" {
-		t.Errorf("expected cached presence 'Available', got %q (exists=%v)", prev, hasPrev)
+	if !hasPrev || prev.Availability != "Available" {
+		t.Errorf("expected cached presence 'Available', got %+v (exists=%v)", prev, hasPrev)
+	}
+}
+
+// An empty status message is sent, not left out, so it clears the old one.
+func TestSetPresenceSendsEmptyStatusMsg(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/_matrix/client/v3/presence/@ghost:localhost/status" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+	cli, err := mautrix.NewClient(srv.URL, id.UserID("@ghost:localhost"), "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := setPresence(context.Background(), cli, event.PresenceOffline, ""); err != nil {
+		t.Fatal(err)
+	}
+	if msg, ok := body["status_msg"]; !ok || msg != "" || body["presence"] != "offline" {
+		t.Errorf("body = %v, want presence offline and an empty status_msg", body)
 	}
 }
