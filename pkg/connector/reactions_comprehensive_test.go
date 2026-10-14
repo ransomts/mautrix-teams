@@ -50,6 +50,7 @@ func TestMapEmotionKeyToEmoji_Table(t *testing.T) {
 		// actual value depends on map iteration order, just check non-empty.
 		{"heart", "heart", "❤️", true},
 		{"fire", "fire", "🔥", true},
+		{"inbound-only alias", "expressionless", "😑", true},
 		{"empty", "", "", false},
 		{"custom org emoji", "custom_sparkle", ":custom_sparkle:", true},
 		{"unicode passthrough", "🦊", "🦊", true},

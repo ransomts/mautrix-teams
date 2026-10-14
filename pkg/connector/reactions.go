@@ -26,6 +26,7 @@ var emotionKeyAliases = map[string]string{
 	"hearteyes":           "😍",
 	"ghost":               "👻",
 	"fistbump":            "👊",
+	"expressionless":      "😑",
 }
 
 var skinToneSuffixes = map[string]string{
