@@ -77,6 +77,13 @@ func (c *TeamsClient) buildReactionSyncData(reactions []model.MessageReaction) (
 		if !ok {
 			continue
 		}
+		if emoji == ":"+emotionKey+":" {
+			if _, seen := unknownEmotionKeys.LoadOrStore(emotionKey, true); !seen {
+				log := c.log()
+				log.Warn().Str("emotion_key", emotionKey).
+					Msg("Teams reaction key not in the emoji tables; bridged as :key: (rerun tools/gen-emoji-tables.py)")
+			}
+		}
 		for _, user := range reaction.Users {
 			userID := model.NormalizeTeamsUserID(user.MRI)
 			if userID == "" || isLikelyThreadID(userID) {

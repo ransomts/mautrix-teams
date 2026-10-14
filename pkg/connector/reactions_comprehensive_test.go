@@ -2,6 +2,8 @@ package connector
 
 import (
 	"testing"
+
+	"go.mau.fi/util/variationselector"
 )
 
 // ---------------------------------------------------------------------------
@@ -151,6 +153,63 @@ func TestEmojiRoundtrip(t *testing.T) {
 		// but the key should map back to a valid emoji.
 		if back == "" {
 			t.Errorf("roundtrip for %q produced empty emoji", emoji)
+		}
+	}
+}
+
+func TestEmojiTablesLoaded(t *testing.T) {
+	if len(teamsKeyToEmoji) < 100 || len(unicodeNameToEmoji) < 1000 {
+		t.Fatalf("emoji tables too small: %d Teams keys, %d Unicode names", len(teamsKeyToEmoji), len(unicodeNameToEmoji))
+	}
+}
+
+// Keys once listed by hand in emotionKeyAliases, now covered by the
+// generated tables, decode as before.
+func TestMapEmotionKeyToEmoji_GeneratedTables(t *testing.T) {
+	for key, want := range map[string]string{
+		"smileeyes":           "😊",
+		"clappinghands":       "👏",
+		"snake":               "🐍",
+		"smilingfacewithtear": "🥲",
+		"pinchedfingers":      "🤌",
+		"eyes":                "👀",
+		"heavycheckmark":      "✔️",
+		"hundredpointssymbol": "💯",
+		"hearteyes":           "😍",
+		"ghost":               "👻",
+		"expressionless":      "😑",
+		// Teams' own table wins over the hand-made outbound one.
+		"speechless": "😐",
+		// Legacy Skype names stay in emotionKeyAliases.
+		"laughcry": "😂",
+		"fistbump": "👊",
+	} {
+		if got, ok := MapEmotionKeyToEmoji(key); !ok || got != variationselector.FullyQualify(want) {
+			t.Errorf("MapEmotionKeyToEmoji(%q) = %q, %v; want %q", key, got, ok, want)
+		}
+	}
+}
+
+func TestMapEmojiToEmotionKey_SkinToneKeepsKey(t *testing.T) {
+	if got, _ := MapEmojiToEmotionKey("👍🏻"); got != "like" {
+		t.Errorf("MapEmojiToEmotionKey(👍🏻) = %q, want like", got)
+	}
+	if got, _ := MapEmojiToEmotionKey("😶"); got == "speechless" {
+		t.Errorf("😶 went out as speechless, which Teams draws as 😐")
+	}
+}
+
+// An emoji whose hand-mapped key Teams draws differently goes out under
+// Teams' own key for it.
+func TestMapEmojiToEmotionKey_AgreesWithTeams(t *testing.T) {
+	for emoji, key := range emojiToEmotionKey {
+		got, ok := MapEmojiToEmotionKey(emoji)
+		if !ok {
+			t.Errorf("MapEmojiToEmotionKey(%q) failed", emoji)
+			continue
+		}
+		if back, _ := MapEmotionKeyToEmoji(got); teamsKeyToEmoji[got] != "" && back != stripSkinTones(emoji) {
+			t.Errorf("%q (hand key %q) goes out as %q, which Teams draws as %q", emoji, key, got, back)
 		}
 	}
 }
