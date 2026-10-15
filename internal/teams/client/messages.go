@@ -855,3 +855,49 @@ func (c *Client) debugRequest(message string, endpoint string, req *http.Request
 		Interface("headers", headers).
 		Msg(message)
 }
+
+// forwardTemplateID is the template the Teams client forwards with.
+const forwardTemplateID = "basic_forward_message_template"
+
+// ForwardMessages forwards messages of the chat sourceThreadID to
+// targetThreadID as the Teams client does: Teams copies them, with the
+// Forward card and originalMessageContext, into the target chat.
+// POST {conversations}/{source}/messages/forward.
+func (c *Client) ForwardMessages(ctx context.Context, sourceThreadID string, messageIDs []string, targetThreadID string) error {
+	if c == nil || c.HTTP == nil {
+		return ErrMissingHTTPClient
+	}
+	if c.Token == "" {
+		return ErrMissingToken
+	}
+	baseURL := c.SendMessagesURL
+	if baseURL == "" {
+		baseURL = defaultSendMessagesURL
+	}
+	endpoint := fmt.Sprintf("%s/%s/messages/forward", strings.TrimSuffix(baseURL, "/"), url.PathEscape(sourceThreadID))
+	payload, err := json.Marshal(map[string]any{
+		"targetThreadIds": []string{targetThreadID},
+		"messageIds":      messageIDs,
+		"templateId":      forwardTemplateID,
+	})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("authentication", "skypetoken="+c.Token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		return fmt.Errorf("forward failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+	}
+	return nil
+}

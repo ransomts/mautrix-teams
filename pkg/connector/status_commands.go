@@ -48,6 +48,64 @@ var cmdStatus = &commands.FullHandler{
 	RequiresLogin: true,
 }
 
+const locationUsage = "<office|remote|clear> [<duration, e.g. 4h> | <RFC 3339 time>]"
+
+var locationWords = map[string]int{
+	"office": presence.LocationOffice,
+	"remote": presence.LocationRemote,
+	"clear":  presence.LocationUnknown,
+}
+
+var cmdLocation = &commands.FullHandler{
+	Func: fnLocation,
+	Name: "location",
+	Help: commands.HelpMeta{
+		Section:     helpSectionStatus,
+		Description: "Set your Teams work location (until the end of the day, unless a time is given).",
+		Args:        locationUsage,
+	},
+	RequiresLogin: true,
+}
+
+func fnLocation(ce *commands.Event) {
+	if len(ce.Args) < 1 || len(ce.Args) > 2 {
+		ce.Reply("Usage: `$cmdprefix location %s`", locationUsage)
+		return
+	}
+	location, ok := locationWords[strings.ToLower(ce.Args[0])]
+	if !ok {
+		ce.Reply("Unknown location %q.  Usage: `$cmdprefix location %s`", ce.Args[0], locationUsage)
+		return
+	}
+	var arg string
+	if len(ce.Args) == 2 {
+		arg = ce.Args[1]
+	}
+	expiry, err := parseExpiry(arg, time.Now())
+	if err != nil {
+		ce.Reply("%s", err)
+		return
+	}
+	client := commandClient(ce)
+	if client == nil {
+		return
+	}
+	pc, err := client.presenceClient(ce.Ctx)
+	if err == nil {
+		err = pc.SetWorkLocation(ce.Ctx, location, expiry)
+	}
+	if err != nil {
+		ce.Reply("Setting your Teams work location failed: %s", err)
+		return
+	}
+	go client.pollPresence(context.WithoutCancel(ce.Ctx))
+	if location == presence.LocationUnknown {
+		ce.Reply("Teams work location cleared.")
+	} else {
+		ce.Reply("Teams work location set to %s%s.", ce.Args[0], expiryPhrase(arg, expiry))
+	}
+}
+
 var cmdNote = &commands.FullHandler{
 	Func: fnNote,
 	Name: "note",
@@ -62,7 +120,7 @@ var cmdNote = &commands.FullHandler{
 // registerStatusCommands adds the status commands to the bridge's processor.
 func registerStatusCommands(proc any) {
 	if p, ok := proc.(*commands.Processor); ok {
-		p.AddHandlers(cmdStatus, cmdNote, cmdChat, cmdOOF)
+		p.AddHandlers(cmdStatus, cmdNote, cmdLocation, cmdChat, cmdOOF, cmdFiles, cmdForward)
 	}
 }
 
@@ -226,6 +284,7 @@ func (c *TeamsClient) publishOwnPresence(ctx context.Context, p presence.Presenc
 		"status":        status,
 		"note":          p.Note.Text(now),
 		"out_of_office": p.CalendarData.IsOutOfOffice,
+		"location":      p.WorkLocation.Words(now),
 		"updated_ts":    now.UnixMilli(),
 	}
 	return c.publishAccountData(ctx, ownPresenceAccountDataType, content)

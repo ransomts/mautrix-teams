@@ -997,3 +997,27 @@ func TestSendWithSubjectAndImportance(t *testing.T) {
 		t.Errorf("properties = %v", payload["properties"])
 	}
 }
+
+func TestForwardMessages(t *testing.T) {
+	var path string
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+	client := NewClient(server.Client())
+	client.SendMessagesURL = server.URL + "/v1/users/ME/conversations"
+	client.Token = "token123"
+	if err := client.ForwardMessages(context.Background(), "19:src@unq.gbl.spaces", []string{"17"}, "48:notes"); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/v1/users/ME/conversations/19:src@unq.gbl.spaces/messages/forward" {
+		t.Errorf("path = %s", path)
+	}
+	if payload["templateId"] != "basic_forward_message_template" ||
+		payload["targetThreadIds"].([]any)[0] != "48:notes" || payload["messageIds"].([]any)[0] != "17" {
+		t.Errorf("payload = %v", payload)
+	}
+}

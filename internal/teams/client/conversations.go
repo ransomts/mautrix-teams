@@ -130,19 +130,19 @@ func (c *Client) listConversations(ctx context.Context, token string, pageSize i
 	return payload.Conversations, nil
 }
 
-// GetThreadPinnedItems returns a chat's pinnedItems thread property, the
-// JSON string listing its pinned messages ("" when none).  The conversation
-// list leaves it out; the thread endpoint has it.
-func (c *Client) GetThreadPinnedItems(ctx context.Context, threadID string) (string, error) {
+// GetThreadProperties returns a thread's properties from the chat service's
+// thread endpoint, each as a string (JSON strings decoded, anything else as
+// written).  The conversation list leaves some out, such as pinnedItems.
+func (c *Client) GetThreadProperties(ctx context.Context, threadID string) (map[string]string, error) {
 	if c == nil || c.HTTP == nil {
-		return "", ErrMissingHTTPClient
+		return nil, ErrMissingHTTPClient
 	}
 	if c.Token == "" {
-		return "", ErrMissingToken
+		return nil, ErrMissingToken
 	}
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
-		return "", errors.New("missing thread id")
+		return nil, errors.New("missing thread id")
 	}
 	baseURL := c.MessagesURL
 	if baseURL == "" {
@@ -150,23 +150,34 @@ func (c *Client) GetThreadPinnedItems(ctx context.Context, threadID string) (str
 	}
 	endpoint := fmt.Sprintf("%s/v1/threads/%s?view=msnp24Equivalent", deriveBaseURL(baseURL), url.PathEscape(threadID))
 	var payload struct {
-		Properties struct {
-			PinnedItems json.RawMessage `json:"pinnedItems"`
-		} `json:"properties"`
+		Properties map[string]json.RawMessage `json:"properties"`
 	}
 	if err := c.fetchJSON(ctx, endpoint, &payload); err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(payload.Properties))
+	for name, raw := range payload.Properties {
+		if len(raw) == 0 || string(raw) == "null" {
+			continue
+		}
+		var str string
+		if err := json.Unmarshal(raw, &str); err == nil {
+			out[name] = str
+		} else {
+			out[name] = string(raw)
+		}
+	}
+	return out, nil
+}
+
+// GetThreadPinnedItems returns a chat's pinnedItems thread property, the
+// JSON string listing its pinned messages ("" when none).
+func (c *Client) GetThreadPinnedItems(ctx context.Context, threadID string) (string, error) {
+	props, err := c.GetThreadProperties(ctx, threadID)
+	if err != nil {
 		return "", err
 	}
-	raw := payload.Properties.PinnedItems
-	if len(raw) == 0 || string(raw) == "null" {
-		return "", nil
-	}
-	var str string
-	if err := json.Unmarshal(raw, &str); err == nil {
-		return str, nil
-	}
-	// An array rather than a JSON string: hand it on as written.
-	return string(raw), nil
+	return props["pinnedItems"], nil
 }
 
 // GetThreadMembers returns the user IDs ("8:orgid:…") of a thread's members

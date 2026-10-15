@@ -125,9 +125,10 @@ func TestPresenceStatusNotes(t *testing.T) {
 		Note: presence.Note{Message: "Office hours 2&ndash;4 in &lt;b&gt;McAdams&lt;/b&gt;<pinnednote></pinnednote>"},
 		CalendarData: presence.CalendarData{IsOutOfOffice: true,
 			OutOfOfficeNote: presence.Note{Message: "<p>Back Monday</p>", Expiry: "2026-10-20T00:00:00Z"}},
+		WorkLocation: presence.WorkLocation{Location: "2"},
 	}
 	mp, msg := presenceStatus(p, now)
-	if mp != event.PresenceUnavailable || msg != "Away\nNote: Office hours 2–4 in <b>McAdams</b>\nOut of office: Back Monday" {
+	if mp != event.PresenceUnavailable || msg != "Away\nNote: Office hours 2–4 in <b>McAdams</b>\nOut of office: Back Monday\nLocation: Remote" {
 		t.Errorf("got %s %q", mp, msg)
 	}
 	// Expired notes are dropped; plain available has an empty first line only when a note follows.

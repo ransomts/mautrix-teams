@@ -29,6 +29,7 @@ const (
 	getPresencePath       = "v1/presence/getpresence/"
 	forceAvailabilityPath = "v1/me/forceavailability/"
 	publishNotePath       = "v1/me/publishnote"
+	workLocationPath      = "v1/me/workLocation/"
 )
 
 // Availabilities the user can set (SetAvailability); Offline is sent
@@ -48,6 +49,63 @@ type Presence struct {
 	Activity     string       `json:"activity"`
 	Note         Note         `json:"note"`
 	CalendarData CalendarData `json:"calendarData"`
+	WorkLocation WorkLocation `json:"workLocation"`
+}
+
+// Work locations, as Teams numbers them.
+const (
+	LocationUnknown = 0
+	LocationOffice  = 1
+	LocationRemote  = 2
+	LocationTimeOff = 3
+)
+
+// WorkLocation is where the user said (or Teams found) they work today.
+type WorkLocation struct {
+	Location LocationValue `json:"location"`
+	Expiry   string        `json:"expiry"`
+}
+
+// LocationValue is a work location as Teams sends it: a number (1) or a
+// name ("Office").  Anything else decodes as empty rather than failing the
+// whole presence response.
+type LocationValue string
+
+func (l *LocationValue) UnmarshalJSON(data []byte) error {
+	var s string
+	if json.Unmarshal(data, &s) == nil {
+		*l = LocationValue(s)
+		return nil
+	}
+	var n json.Number
+	if json.Unmarshal(data, &n) == nil {
+		*l = LocationValue(n.String())
+		return nil
+	}
+	*l = ""
+	return nil
+}
+
+func (l LocationValue) String() string { return string(l) }
+
+// Words is the location in Teams' words ("In the office", "Remote"), or ""
+// for none or one expired at now.
+func (w WorkLocation) Words(now time.Time) string {
+	if w.Expiry != "" {
+		if exp, err := time.Parse(time.RFC3339, w.Expiry); err == nil && !exp.After(now) {
+			return ""
+		}
+	}
+	switch w.Location.String() {
+	case "1", "Office":
+		return "In the office"
+	case "2", "Remote":
+		return "Remote"
+	case "3", "TimeOff":
+		return "Time off"
+	default:
+		return ""
+	}
 }
 
 // Note is a status or out-of-office note.  Message is HTML-escaped and may
@@ -154,6 +212,18 @@ func (c *Client) SetAvailability(ctx context.Context, availability string, expir
 		body["desiredExpirationTime"] = expiry.UTC().Format(time.RFC3339)
 	}
 	_, err := c.do(ctx, http.MethodPut, forceAvailabilityPath, body)
+	return err
+}
+
+// SetWorkLocation sets the user's own work location (LocationOffice,
+// LocationRemote, LocationTimeOff; LocationUnknown clears it) until expiry,
+// or the end of the day when zero, as Teams keeps it.
+func (c *Client) SetWorkLocation(ctx context.Context, location int, expiry time.Time) error {
+	body := map[string]any{"location": location}
+	if !expiry.IsZero() {
+		body["expirationTime"] = expiry.UTC().Format(time.RFC3339)
+	}
+	_, err := c.do(ctx, http.MethodPut, workLocationPath, body)
 	return err
 }
 

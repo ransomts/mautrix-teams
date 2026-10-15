@@ -99,7 +99,12 @@ func (c *TeamsClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 	}
 	c.noteTeamsResult(err)
 	if err != nil {
-		log.Warn().Err(err).Str("thread_id", threadID).Str("msg_type", string(msg.Content.MsgType)).Msg("Failed to send message to Teams")
+		logEvt := log.Warn().Err(err).Str("thread_id", threadID).Str("msg_type", string(msg.Content.MsgType))
+		var sendErr consumerclient.SendMessageError
+		if errors.As(err, &sendErr) {
+			logEvt = logEvt.Int("status", sendErr.Status).Str("body", sendErr.BodySnippet)
+		}
+		logEvt.Msg("Failed to send message to Teams")
 		msg.RemovePending(networkid.TransactionID(clientMessageID))
 		return nil, wrapTeamsSendError(err)
 	}

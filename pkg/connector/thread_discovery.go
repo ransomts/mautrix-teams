@@ -651,7 +651,8 @@ func (c *TeamsClient) fetchTeamChannelMap(ctx context.Context) map[string]graph.
 		return nil
 	}
 	if err := c.ensureValidGraphToken(ctx); err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).Msg("Cannot fetch team/channel names: graph token unavailable")
+		log := c.log()
+		log.Warn().Err(err).Msg("Cannot fetch team/channel names: graph token unavailable")
 		return nil
 	}
 	graphToken, err := c.graphAccessToken()
@@ -666,7 +667,8 @@ func (c *TeamsClient) fetchTeamChannelMap(ctx context.Context) map[string]graph.
 	gc.AccessToken = graphToken
 	channelMap, err := gc.ListJoinedTeamsAndChannels(ctx)
 	if err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to fetch team/channel mapping from Graph API")
+		log := c.log()
+		log.Warn().Err(err).Msg("Failed to fetch team/channel mapping from Graph API")
 		return nil
 	}
 	return channelMap

@@ -30,9 +30,9 @@ const presenceBatchSize = 100
 // presenceStatus is the Matrix presence and status message for Teams
 // presence p at now.  The message's first line is Teams' word for the
 // state ("In a meeting"; empty for plain available or offline); a status
-// note and an out-of-office message follow on lines of their own,
-// "Note: …" and "Out of office: …", the only way to carry them, since a
-// Matrix presence has no other text.
+// note, an out-of-office message and the work location follow on lines of
+// their own, "Note: …", "Out of office: …" and "Location: …", the only way
+// to carry them, since a Matrix presence has no other text.
 func presenceStatus(p presence.Presence, now time.Time) (event.Presence, string) {
 	mp, status := mapTeamsPresence(p.Availability, p.Activity)
 	lines := []string{status}
@@ -41,6 +41,9 @@ func presenceStatus(p presence.Presence, now time.Time) (event.Presence, string)
 	}
 	if oof := p.CalendarData.OutOfOfficeNote.Text(now); oof != "" && p.CalendarData.IsOutOfOffice {
 		lines = append(lines, "Out of office: "+oof)
+	}
+	if where := p.WorkLocation.Words(now); where != "" {
+		lines = append(lines, "Location: "+where)
 	}
 	if len(lines) == 1 {
 		return mp, status
@@ -112,7 +115,9 @@ func (c *TeamsClient) pollPresence(ctx context.Context) {
 	if c.presenceForbidden.Load() {
 		return
 	}
-	log := zerolog.Ctx(ctx)
+	// The client's logger: the loop's context carries none, and
+	// zerolog.Ctx would give a disabled one, hiding every failure here.
+	log := c.log()
 
 	token, fresh, err := c.ensurePresenceToken(ctx)
 	if err != nil {
@@ -164,8 +169,18 @@ func (c *TeamsClient) pollPresence(ctx context.Context) {
 			return
 		}
 		if err != nil {
-			log.Debug().Err(err).Msg("Presence request failed")
+			// A warning the first time in a row, so a poll that keeps
+			// failing (as a response that stopped decoding once did) is
+			// seen; quiet after that.
+			if c.presenceFailing.CompareAndSwap(false, true) {
+				log.Warn().Err(err).Msg("Presence request failed; statuses are not being updated")
+			} else {
+				log.Debug().Err(err).Msg("Presence request failed")
+			}
 			continue
+		}
+		if c.presenceFailing.CompareAndSwap(true, false) {
+			log.Info().Msg("Presence requests work again")
 		}
 
 		c.presenceMu.Lock()
@@ -204,7 +219,8 @@ func (c *TeamsClient) keepPresenceAlive(ctx context.Context) {
 			continue
 		}
 		if err := c.pushGhostPresence(ctx, uid, p); err != nil {
-			zerolog.Ctx(ctx).Debug().Err(err).Str("user_id", uid).Msg("Failed to refresh ghost presence")
+			log := c.log()
+			log.Debug().Err(err).Str("user_id", uid).Msg("Failed to refresh ghost presence")
 			// Sent afresh by the next poll.
 			delete(c.presenceCache, uid)
 		}

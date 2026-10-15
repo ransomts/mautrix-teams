@@ -113,3 +113,56 @@ func (c *TeamsClient) conversationID(ctx context.Context, threadID string) strin
 	}
 	return threadID
 }
+
+// forwardAPI is the part of the Teams client that forwards messages.
+type forwardAPI interface {
+	ForwardMessages(ctx context.Context, sourceThreadID string, messageIDs []string, targetThreadID string) error
+}
+
+var cmdForward = &commands.FullHandler{
+	Func: fnForward,
+	Name: "forward",
+	Help: commands.HelpMeta{
+		Section:     helpSectionStatus,
+		Description: "Forward a bridged message to another Teams chat, as Teams forwards (\"Forwarded from …\").",
+		Args:        "<event ID> <target room ID>",
+	},
+	RequiresLogin: true,
+}
+
+// fnForward asks Teams to forward the message: Teams copies it into the
+// target chat, and the poller brings the copy over like any message, with
+// its "Forwarded from" line.  Nothing is sent to the target room from
+// Matrix, so there is no duplicate.
+func fnForward(ce *commands.Event) {
+	if len(ce.Args) != 2 {
+		ce.Reply("Usage: `$cmdprefix forward <event ID> <target room ID>`")
+		return
+	}
+	part, err := ce.Bridge.DB.Message.GetPartByMXID(ce.Ctx, id.EventID(ce.Args[0]))
+	if err != nil || part == nil {
+		ce.Reply("%s is not a bridged Teams message.", ce.Args[0])
+		return
+	}
+	target, err := ce.Bridge.GetPortalByMXID(ce.Ctx, id.RoomID(ce.Args[1]))
+	if err != nil || target == nil {
+		ce.Reply("%s is not a bridged Teams chat.", ce.Args[1])
+		return
+	}
+	client := commandClient(ce)
+	if client == nil {
+		return
+	}
+	api, ok := client.getAPI().(forwardAPI)
+	if !ok {
+		ce.Reply("This Teams client cannot forward.")
+		return
+	}
+	source := client.conversationID(ce.Ctx, string(part.Room.ID))
+	dest := client.conversationID(ce.Ctx, string(target.ID))
+	if err := api.ForwardMessages(ce.Ctx, source, []string{string(part.ID)}, dest); err != nil {
+		ce.Reply("Forwarding failed: %s", err)
+		return
+	}
+	ce.Reply("Forwarded in Teams; it appears in the chat shortly.")
+}

@@ -300,6 +300,9 @@ func (c *TeamsClient) syncTeams(ctx context.Context) {
 	// structured room names, so team spaces can be named even when
 	// me/joinedTeams is inconsistent with the channels the user actually sees.
 	channelMap := c.fetchTeamChannelMap(ctx)
+	if channelMap != nil {
+		c.channelTeams.Store(channelMap)
+	}
 	log.Debug().Msg("Syncing team spaces")
 	c.syncTeamSpaces(ctx, channelMap)
 	log.Debug().Msg("Applying structured room names")
