@@ -120,7 +120,7 @@ var cmdNote = &commands.FullHandler{
 // registerStatusCommands adds the status commands to the bridge's processor.
 func registerStatusCommands(proc any) {
 	if p, ok := proc.(*commands.Processor); ok {
-		p.AddHandlers(cmdStatus, cmdNote, cmdLocation, cmdChat, cmdOOF, cmdFiles, cmdForward)
+		p.AddHandlers(cmdStatus, cmdNote, cmdLocation, cmdChat, cmdOOF, cmdFiles, cmdForward, cmdSave, cmdUnsave)
 	}
 }
 

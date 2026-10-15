@@ -32,3 +32,14 @@ func ParseConsumptionHorizonLatestReadTS(horizon string) (int64, bool) {
 	}
 	return ts, true
 }
+
+// ParseConsumptionHorizonMessageID is the ID of the last message read, the
+// horizon's first part ("<message ID>;<read time>;<client message ID>").
+func ParseConsumptionHorizonMessageID(horizon string) (string, bool) {
+	id, _, _ := strings.Cut(horizon, ";")
+	id = strings.TrimSpace(id)
+	if _, err := strconv.ParseInt(id, 10, 64); err != nil || id == "0" {
+		return "", false
+	}
+	return id, true
+}

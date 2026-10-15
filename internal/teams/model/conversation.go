@@ -131,6 +131,9 @@ type RemoteConversation struct {
 	LastMessage      struct {
 		ID string `json:"id"`
 	} `json:"lastMessage"`
+	// LastRcMetadataVersion changes whenever the user's reply chain
+	// metadata of the conversation (saved messages, followed posts) does.
+	LastRcMetadataVersion json.Number `json:"lastRcMetadataVersion"`
 }
 
 const defaultRoomName = "Chat"

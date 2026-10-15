@@ -49,3 +49,18 @@ func TestParseConsumptionHorizonLatestReadTS(t *testing.T) {
 		})
 	}
 }
+
+func TestParseConsumptionHorizonMessageID(t *testing.T) {
+	for input, want := range map[string]string{
+		"1791891471042;1791892337814;3958124570138072226": "1791891471042",
+		"0;1769620117227;2": "",
+		";1769620117227;2":  "",
+		"abc;1;2":           "",
+		"":                  "",
+	} {
+		got, ok := ParseConsumptionHorizonMessageID(input)
+		if got != want || ok != (want != "") {
+			t.Errorf("%q: got %q, %v; want %q", input, got, ok, want)
+		}
+	}
+}

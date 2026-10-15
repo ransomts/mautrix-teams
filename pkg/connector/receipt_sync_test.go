@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/networkid"
+	"maunium.net/go/mautrix/bridgev2/simplevent"
 
 	"go.mau.fi/mautrix-teams/internal/teams/model"
 )
@@ -93,5 +94,27 @@ func TestMatrixReceiptCoveredByOwnHorizonNotSent(t *testing.T) {
 	state, err := c.Main.DB.ConsumptionHorizon.Get(ctx, c.Login.ID, outDMThread, testSelfUserID)
 	if err != nil || state == nil || state.LastReadTS < before {
 		t.Fatalf("state %+v, err %v", state, err)
+	}
+}
+
+func TestParticipantReceiptTargetsMessageRead(t *testing.T) {
+	sink := &capturingEventSink{}
+	c, _ := newBridgeTestClient(t, &mockTeamsAPI{}, sink)
+	ctx := context.Background()
+	h := &model.ConsumptionHorizon{ID: "8:orgid:alice", ConsumptionHorizon: "1791891471042;1791892337814;39581"}
+	if err := c.syncParticipantHorizon(ctx, zerolog.Nop(), testThreadID, testSelfUserID, "8:orgid:alice", h); err != nil {
+		t.Fatal(err)
+	}
+	events := sink.getEvents()
+	if len(events) != 1 {
+		t.Fatalf("got %d events", len(events))
+	}
+	receipt, ok := events[0].(*simplevent.Receipt)
+	if !ok || receipt.LastTarget != "1791891471042" || receipt.ReadUpTo.UnixMilli() != 1791892337814 {
+		t.Fatalf("receipt %+v", events[0])
+	}
+	// The same read again is not sent twice.
+	if err := c.syncParticipantHorizon(ctx, zerolog.Nop(), testThreadID, testSelfUserID, "8:orgid:alice", h); err != nil || len(sink.getEvents()) != 1 {
+		t.Fatalf("err %v, %d events", err, len(sink.getEvents()))
 	}
 }

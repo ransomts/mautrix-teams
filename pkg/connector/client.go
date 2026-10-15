@@ -77,6 +77,7 @@ type TeamsClient struct {
 	pinnedMessages pinnedMessageTracker // pinned messages of each chat; see pinned_messages.go
 	horizons       sync.Map             // threadID -> last seen consumption horizon (string); see chat_commands.go
 	activitySig    string               // newest activity item published; see activity_feed.go
+	saved          savedTracker         // saved messages of each chat; see saved_messages.go
 	channelTeams   atomic.Value         // map[string]graph.ChannelInfo from the last team sync; see channel_files.go
 	mutes          stateTracker         // mute state of each chat on Teams
 	unreads        stateTracker         // marked-unread state of each chat on Teams

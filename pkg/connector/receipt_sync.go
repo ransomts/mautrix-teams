@@ -4,8 +4,6 @@ package connector
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"strings"
 	"time"
 
@@ -17,14 +15,6 @@ import (
 	"go.mau.fi/mautrix-teams/internal/teams/model"
 	"go.mau.fi/mautrix-teams/pkg/teamsdb"
 )
-
-const getLastMessagePartBySenderAtOrBeforeTimeQuery = `
-	SELECT id
-	FROM message
-	WHERE bridge_id=$1 AND room_id=$2 AND room_receiver=$3 AND sender_id=$4 AND timestamp<=$5
-	ORDER BY timestamp DESC, part_id DESC
-	LIMIT 1
-`
 
 func (c *TeamsClient) pollConsumptionHorizons(ctx context.Context, th *teamsdb.ThreadState, now time.Time) error {
 	if c == nil || c.Main == nil || c.Main.DB == nil || c.Login == nil || th == nil {
@@ -178,16 +168,10 @@ func (c *TeamsClient) syncParticipantHorizon(ctx context.Context, log zerolog.Lo
 		Msg("consumption horizon advanced")
 
 	readUpTo := time.UnixMilli(latestReadTS).UTC()
-	portalKey := c.portalKey(threadID)
-	targetID, err := c.getLastSentMessagePartAtOrBeforeTime(ctx, portalKey, teamsUserIDToNetworkUserID(selfID), readUpTo)
-	if err != nil {
-		return err
-	}
-
 	receipt := &simplevent.Receipt{
 		EventMeta: simplevent.EventMeta{
 			Type:      bridgev2.RemoteEventReadReceipt,
-			PortalKey: portalKey,
+			PortalKey: c.portalKey(threadID),
 			Sender: bridgev2.EventSender{
 				Sender: teamsUserIDToNetworkUserID(remoteID),
 			},
@@ -195,38 +179,16 @@ func (c *TeamsClient) syncParticipantHorizon(ctx context.Context, log zerolog.Lo
 		},
 		ReadUpTo: readUpTo,
 	}
-	if targetID != "" {
-		receipt.LastTarget = targetID
-		receipt.Targets = []networkid.MessageID{targetID}
+	// The receipt goes on the message they read last, whoever sent it, so
+	// a group chat shows who has seen each message.  Without one (a message
+	// not bridged), bridgev2 takes the last message before they read.
+	if msgID, ok := model.ParseConsumptionHorizonMessageID(remoteHorizon.ConsumptionHorizon); ok {
+		receipt.LastTarget = networkid.MessageID(msgID)
+		receipt.Targets = []networkid.MessageID{receipt.LastTarget}
 	}
 	c.queueRemoteEvent(receipt)
 
 	return c.Main.DB.ConsumptionHorizon.UpsertLastRead(ctx, c.Login.ID, threadID, remoteID, latestReadTS)
-}
-
-func (c *TeamsClient) getLastSentMessagePartAtOrBeforeTime(ctx context.Context, portal networkid.PortalKey, senderID networkid.UserID, maxTS time.Time) (networkid.MessageID, error) {
-	if c == nil || c.Main == nil || c.Main.Bridge == nil || c.Main.Bridge.DB == nil {
-		return "", nil
-	}
-	if senderID == "" {
-		return "", nil
-	}
-	var msgID networkid.MessageID
-	err := c.Main.Bridge.DB.QueryRow(
-		ctx,
-		getLastMessagePartBySenderAtOrBeforeTimeQuery,
-		c.Main.Bridge.DB.BridgeID,
-		portal.ID,
-		portal.Receiver,
-		senderID,
-		maxTS.UnixNano(),
-	).Scan(&msgID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	} else if err != nil {
-		return "", err
-	}
-	return msgID, nil
 }
 
 func (c *TeamsClient) shouldPollReceipts(threadID string, now time.Time) bool {
