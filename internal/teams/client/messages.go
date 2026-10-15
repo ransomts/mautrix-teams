@@ -462,6 +462,69 @@ func (c *Client) validateSendArgs(threadID string, htmlContent string, fromUserI
 	return threadID, nil
 }
 
+// propertiesKey carries properties a send adds to its message, in its context.
+type propertiesKey struct{}
+
+// withContextProperty returns ctx adding name=value to the properties of
+// messages sent with it.
+func withContextProperty(ctx context.Context, name, value string) context.Context {
+	old, _ := ctx.Value(propertiesKey{}).(map[string]string)
+	props := make(map[string]string, len(old)+1)
+	for k, v := range old {
+		props[k] = v
+	}
+	props[name] = value
+	return context.WithValue(ctx, propertiesKey{}, props)
+}
+
+// WithImportance returns ctx marking messages sent with it as Important
+// ("high") or Urgent ("urgent"); "" is standard.  Teams keeps it in the
+// message properties as "importance".
+func WithImportance(ctx context.Context, importance string) context.Context {
+	if importance == "" {
+		return ctx
+	}
+	return withContextProperty(ctx, "importance", importance)
+}
+
+// WithSubject returns ctx giving messages sent with it a subject: the
+// title of a new channel post (Teams' "subject" property).
+func WithSubject(ctx context.Context, subject string) context.Context {
+	if subject == "" {
+		return ctx
+	}
+	return withContextProperty(ctx, "subject", subject)
+}
+
+// withContextProperties adds ctx's properties (importance, subject), if any, to a
+// send's properties.
+func withContextProperties(ctx context.Context, properties any) any {
+	extra, _ := ctx.Value(propertiesKey{}).(map[string]string)
+	if len(extra) == 0 {
+		return properties
+	}
+	switch props := properties.(type) {
+	case nil:
+		out := make(map[string]any, len(extra))
+		for k, v := range extra {
+			out[k] = v
+		}
+		return out
+	case map[string]any:
+		for k, v := range extra {
+			props[k] = v
+		}
+		return props
+	case map[string]string:
+		for k, v := range extra {
+			props[k] = v
+		}
+		return props
+	default:
+		return properties
+	}
+}
+
 // postRichTextMessage POSTs a RichText/Html message to the thread's messages
 // endpoint through the retrying executor and returns the response status.
 // properties, when non-nil, is sent as the payload's "properties" object;
@@ -488,7 +551,7 @@ func (c *Client) postRichTextMessage(ctx context.Context, threadID string, htmlC
 		"from":                fromUserID,
 		"fromUserId":          fromUserID,
 	}
-	if properties != nil {
+	if properties := withContextProperties(ctx, properties); properties != nil {
 		payload["properties"] = properties
 	}
 	body, err := json.Marshal(payload)

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/id"
@@ -114,5 +115,28 @@ func TestSetPresenceSendsEmptyStatusMsg(t *testing.T) {
 	}
 	if msg, ok := body["status_msg"]; !ok || msg != "" || body["presence"] != "offline" {
 		t.Errorf("body = %v, want presence offline and an empty status_msg", body)
+	}
+}
+
+func TestPresenceStatusNotes(t *testing.T) {
+	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	p := presence.Presence{
+		Availability: "Away", Activity: "Away",
+		Note: presence.Note{Message: "Office hours 2&ndash;4 in &lt;b&gt;McAdams&lt;/b&gt;<pinnednote></pinnednote>"},
+		CalendarData: presence.CalendarData{IsOutOfOffice: true,
+			OutOfOfficeNote: presence.Note{Message: "<p>Back Monday</p>", Expiry: "2026-10-20T00:00:00Z"}},
+	}
+	mp, msg := presenceStatus(p, now)
+	if mp != event.PresenceUnavailable || msg != "Away\nNote: Office hours 2–4 in <b>McAdams</b>\nOut of office: Back Monday" {
+		t.Errorf("got %s %q", mp, msg)
+	}
+	// Expired notes are dropped; plain available has an empty first line only when a note follows.
+	p = presence.Presence{Availability: "Available", Note: presence.Note{Message: "old", Expiry: "2026-10-01T00:00:00Z"}}
+	if _, msg := presenceStatus(p, now); msg != "" {
+		t.Errorf("expired note: got %q", msg)
+	}
+	p.Note.Expiry = ""
+	if _, msg := presenceStatus(p, now); msg != "\nNote: old" {
+		t.Errorf("note on available: got %q", msg)
 	}
 }

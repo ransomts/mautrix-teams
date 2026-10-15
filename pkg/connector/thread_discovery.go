@@ -122,6 +122,10 @@ func (c *TeamsClient) refreshThreads(ctx context.Context) error {
 		}
 		chatInfo.UserLocal = userLocal
 		c.queueMarkedUnread(thread, conv.Properties)
+		c.horizons.Store(thread.ID, string(conv.Properties.ConsumptionHorizon))
+		// Pinned messages are not in the conversation list (see
+		// pinned_messages.go); only let members pin here.
+		c.ensurePinnable(ctx, thread.ID)
 
 		// Discovery runs every 30s; only re-announce a chat whose name, topic,
 		// membership, pin or mute changed (or that we have not announced

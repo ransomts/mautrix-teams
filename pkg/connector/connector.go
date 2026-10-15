@@ -34,6 +34,10 @@ func (t *TeamsConnector) GetName() bridgev2.BridgeName {
 
 func (t *TeamsConnector) Init(br *bridgev2.Bridge) {
 	t.Bridge = br
+	if br != nil {
+		registerStatusCommands(br.Commands)
+	}
+	t.registerPinHandler()
 	if br != nil && br.DB != nil && br.DB.Database != nil {
 		t.DB = teamsdb.New(br.ID, br.DB.Database, br.Log.With().Str("db_section", "teams").Logger())
 	}

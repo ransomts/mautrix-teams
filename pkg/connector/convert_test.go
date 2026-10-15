@@ -101,3 +101,20 @@ func TestBuildMediaContentDoesNotClobberEncryptedFileURL(t *testing.T) {
 		t.Fatalf("expected empty url field when encrypted file is present, got %q", got.URL)
 	}
 }
+
+func TestConvertTeamsMessageImportance(t *testing.T) {
+	msg := model.RemoteMessage{Body: "fire drill", SenderID: "8:orgid:x", SenderName: "Alice",
+		PropertiesRaw: []byte(`{"importance":"urgent"}`)}
+	converted, err := (&TeamsClient{}).convertTeamsMessage(context.Background(), nil, nil, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := converted.Parts[0].Extra[importanceExtraKey]; got != "urgent" {
+		t.Errorf("importance extra = %v, want urgent", got)
+	}
+	msg.PropertiesRaw = []byte(`{}`)
+	converted, _ = (&TeamsClient{}).convertTeamsMessage(context.Background(), nil, nil, msg)
+	if _, ok := converted.Parts[0].Extra[importanceExtraKey]; ok {
+		t.Error("a standard message has an importance")
+	}
+}

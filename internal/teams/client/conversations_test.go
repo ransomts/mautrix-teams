@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -74,5 +75,28 @@ func TestListConversations429IsRetryable(t *testing.T) {
 	var retryable RetryableError
 	if !errors.As(err, &retryable) || retryable.Status != http.StatusTooManyRequests || retryable.RetryAfter != 12*time.Second {
 		t.Fatalf("expected a 429 RetryableError with Retry-After 12s, got %#v", err)
+	}
+}
+
+func TestSetPinnedItems(t *testing.T) {
+	var method, path, query string
+	var body map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path, query = r.Method, r.URL.Path, r.URL.RawQuery
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	client := NewClient(server.Client())
+	client.SendMessagesURL = server.URL + "/v1/threads"
+	client.Token = "token123"
+	if err := client.SetPinnedItems(context.Background(), "19:abc@thread.v2", []string{"2", "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if method != http.MethodPut || path != "/v1/threads/19:abc@thread.v2/properties" || query != "name=pinnedItems" {
+		t.Errorf("request = %s %s?%s", method, path, query)
+	}
+	if body["pinnedItems"] != `[{"itemId":"2","itemType":"Message"},{"itemId":"1","itemType":"Message"}]` {
+		t.Errorf("body = %v", body)
 	}
 }

@@ -244,6 +244,7 @@ func (c *TeamsClient) presenceLoop(ctx context.Context) {
 		return
 	case <-time.After(presenceInitialDelay):
 		c.pollPresence(ctx)
+		c.pollActivityFeed(ctx)
 	}
 
 	for {
@@ -255,6 +256,7 @@ func (c *TeamsClient) presenceLoop(ctx context.Context) {
 				return
 			}
 			c.pollPresence(ctx)
+			c.pollActivityFeed(ctx)
 		case <-keepAlive.C:
 			if c.superseded() {
 				return
@@ -282,6 +284,8 @@ func (c *TeamsClient) syncOnce(ctx context.Context) error {
 	c.syncTeams(ctx)
 	log.Debug().Msg("Syncing DM directory info")
 	c.syncDMDirectoryInfo(ctx)
+	log.Debug().Msg("Refreshing pinned messages")
+	c.refreshAllPinnedMessages(ctx)
 	log.Info().Msg("Full sync cycle complete")
 	return nil
 }
@@ -462,6 +466,9 @@ func (c *TeamsClient) ensureValidSkypeToken(ctx context.Context) error {
 	c.Meta.TeamsUserID = auth.NormalizeTeamsUserID(skResult.SkypeID)
 	if skResult.ChatServiceURL != "" {
 		c.Meta.RegionChatServiceURL = skResult.ChatServiceURL
+	}
+	if skResult.MiddleTierURL != "" {
+		c.Meta.RegionMiddleTierURL = skResult.MiddleTierURL
 	}
 	if skResult.AmsURL != "" {
 		c.Meta.RegionAmsURL = skResult.AmsURL

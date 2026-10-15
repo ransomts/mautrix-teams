@@ -936,3 +936,64 @@ func TestListMessagesChannelThreadRoot(t *testing.T) {
 		t.Fatalf("thread roots %v", roots)
 	}
 }
+
+// A send whose context carries an importance marks the message, alongside
+// whatever other properties the send path sets.
+func TestSendWithImportance(t *testing.T) {
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	client := NewClient(server.Client())
+	client.SendMessagesURL = server.URL + "/conversations"
+	client.Token = "token123"
+
+	ctx := WithImportance(context.Background(), "urgent")
+	for _, send := range []func() (int, error){
+		func() (int, error) {
+			return client.SendFormattedMessage(ctx, "19:abc@thread.v2", "hi", "8:live:me", "1", "", nil)
+		},
+		func() (int, error) {
+			return client.SendFormattedMessage(ctx, "19:abc@thread.v2", "hi", "8:live:me", "2", "123", nil)
+		},
+	} {
+		payload = nil
+		if _, err := send(); err != nil {
+			t.Fatal(err)
+		}
+		props, _ := payload["properties"].(map[string]any)
+		if props["importance"] != "urgent" {
+			t.Errorf("properties = %v, want importance urgent", payload["properties"])
+		}
+	}
+	// Without it, a plain send has no properties.
+	payload = nil
+	if _, err := client.SendFormattedMessage(context.Background(), "19:abc@thread.v2", "hi", "8:live:me", "3", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := payload["properties"]; ok {
+		t.Errorf("standard send has properties %v", payload["properties"])
+	}
+}
+
+func TestSendWithSubjectAndImportance(t *testing.T) {
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	client := NewClient(server.Client())
+	client.SendMessagesURL = server.URL + "/conversations"
+	client.Token = "token123"
+	ctx := WithSubject(WithImportance(context.Background(), "high"), "Exam moved")
+	if _, err := client.SendFormattedMessage(ctx, "19:abc@thread.tacv2", "hi", "8:live:me", "1", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	props, _ := payload["properties"].(map[string]any)
+	if props["subject"] != "Exam moved" || props["importance"] != "high" {
+		t.Errorf("properties = %v", payload["properties"])
+	}
+}

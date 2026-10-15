@@ -164,6 +164,7 @@ func (c *TeamsClient) pollPass(ctx context.Context, now time.Time, states map[st
 	if !now.Before(sched.nextTeamSync) {
 		c.syncTeams(ctx)
 		c.syncDMDirectoryInfo(ctx)
+		c.refreshAllPinnedMessages(ctx)
 		sched.nextTeamSync = now.Add(teamSyncInterval)
 	}
 	if !now.Before(sched.nextActivity) {
@@ -443,6 +444,9 @@ func (c *TeamsClient) handleTypingControl(th *teamsdb.ThreadState, msg model.Rem
 // notice; its other bookkeeping is skipped.  It reports whether a notice
 // was queued.
 func (c *TeamsClient) queueNonUserMessage(ctx context.Context, th *teamsdb.ThreadState, msg model.RemoteMessage, senderID string, commit *cursorCommit) bool {
+	if strings.EqualFold(strings.TrimSpace(msg.MessageType), pinnedItemsUpdateType) {
+		c.refreshPinnedMessages(ctx, th.ThreadID)
+	}
 	if evt := c.systemMessageEvent(th, msg); evt != nil {
 		c.queueForCursor(ctx, evt, &evt.EventMeta, commit)
 		return true

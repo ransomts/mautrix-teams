@@ -130,6 +130,45 @@ func (c *Client) listConversations(ctx context.Context, token string, pageSize i
 	return payload.Conversations, nil
 }
 
+// GetThreadPinnedItems returns a chat's pinnedItems thread property, the
+// JSON string listing its pinned messages ("" when none).  The conversation
+// list leaves it out; the thread endpoint has it.
+func (c *Client) GetThreadPinnedItems(ctx context.Context, threadID string) (string, error) {
+	if c == nil || c.HTTP == nil {
+		return "", ErrMissingHTTPClient
+	}
+	if c.Token == "" {
+		return "", ErrMissingToken
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return "", errors.New("missing thread id")
+	}
+	baseURL := c.MessagesURL
+	if baseURL == "" {
+		baseURL = defaultMessagesURL
+	}
+	endpoint := fmt.Sprintf("%s/v1/threads/%s?view=msnp24Equivalent", deriveBaseURL(baseURL), url.PathEscape(threadID))
+	var payload struct {
+		Properties struct {
+			PinnedItems json.RawMessage `json:"pinnedItems"`
+		} `json:"properties"`
+	}
+	if err := c.fetchJSON(ctx, endpoint, &payload); err != nil {
+		return "", err
+	}
+	raw := payload.Properties.PinnedItems
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", nil
+	}
+	var str string
+	if err := json.Unmarshal(raw, &str); err == nil {
+		return str, nil
+	}
+	// An array rather than a JSON string: hand it on as written.
+	return string(raw), nil
+}
+
 // GetThreadMembers returns the user IDs ("8:orgid:…") of a thread's members
 // from the chat service's thread endpoint.  The conversation list does not
 // carry member data for enterprise chats, so this is how a group chat's
@@ -167,8 +206,29 @@ func (c *Client) GetThreadMembers(ctx context.Context, threadID string) ([]strin
 	return members, nil
 }
 
+// SetPinnedItems sets a chat's pinned messages, newest first: the thread
+// property pinnedItems, a JSON string of [{"itemId":…,"itemType":"Message"}],
+// written whole, as the Teams web app writes it.
+func (c *Client) SetPinnedItems(ctx context.Context, threadID string, messageIDs []string) error {
+	items := make([]map[string]string, 0, len(messageIDs))
+	for _, id := range messageIDs {
+		items = append(items, map[string]string{"itemId": id, "itemType": "Message"})
+	}
+	value, err := json.Marshal(items)
+	if err != nil {
+		return err
+	}
+	return c.setThreadProperty(ctx, threadID, "pinnedItems", string(value))
+}
+
 // UpdateConversationTopic sets the topic (display name) for a group chat thread.
 func (c *Client) UpdateConversationTopic(ctx context.Context, threadID string, topic string) error {
+	return c.setThreadProperty(ctx, threadID, "topic", topic)
+}
+
+// setThreadProperty sets one property of a thread:
+// PUT {chat service}/v1/threads/{threadID}/properties?name={name} {"<name>": value}.
+func (c *Client) setThreadProperty(ctx context.Context, threadID string, name string, value string) error {
 	if c == nil || c.HTTP == nil {
 		return ErrMissingHTTPClient
 	}
@@ -185,10 +245,12 @@ func (c *Client) UpdateConversationTopic(ctx context.Context, threadID string, t
 		baseURL = defaultSendMessagesURL
 	}
 	baseURL = strings.TrimSuffix(baseURL, "/")
-	endpoint := fmt.Sprintf("%s/%s/properties?name=topic", baseURL, url.PathEscape(threadID))
+	// Thread properties live under /v1/threads, not the per-user
+	// conversations the send URL names: there they are "not found".
+	endpoint := fmt.Sprintf("%s/v1/threads/%s/properties?name=%s", deriveBaseURL(baseURL), url.PathEscape(threadID), url.QueryEscape(name))
 
 	payload := map[string]string{
-		"topic": topic,
+		name: value,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -210,7 +272,7 @@ func (c *Client) UpdateConversationTopic(ctx context.Context, threadID string, t
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
-		return fmt.Errorf("update conversation topic failed with status %d: %s", resp.StatusCode, string(snippet))
+		return fmt.Errorf("setting thread property %s failed with status %d: %s", name, resp.StatusCode, string(snippet))
 	}
 	return nil
 }

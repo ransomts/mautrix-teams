@@ -193,6 +193,7 @@ func buildDeviceCodeLoginMetadata(ctx context.Context, client *auth.Client, stat
 		TeamsUserID:          teamsUserID,
 		RegionChatServiceURL: skResult.ChatServiceURL,
 		RegionAmsURL:         skResult.AmsURL,
+		RegionMiddleTierURL:  skResult.MiddleTierURL,
 		LoginMethod:          LoginMethodDeviceCode,
 		ClientID:             client.ClientID,
 		RefreshScope:         strings.Join(client.Scopes, " "),

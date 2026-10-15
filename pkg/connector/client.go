@@ -45,11 +45,10 @@ type TeamsClient struct {
 	tokenMu          sync.Mutex
 	skypeRefreshFail refreshFailure
 	graphRefreshFail refreshFailure
-	// The Teams presence service's token, kept in memory only; see presence.go.
-	presenceToken       string
-	presenceTokenExpiry time.Time
-	presenceRefreshFail refreshFailure
-	badCreds            badCredentials // see client_lifecycle.go
+	// Tokens for other resources (presence service, middle tier), kept in
+	// memory only; see resource_tokens.go.
+	resourceTokens map[string]*resourceTokenEntry
+	badCreds       badCredentials // see client_lifecycle.go
 
 	consumerHTTPMu sync.Mutex
 	consumerHTTP   *http.Client
@@ -74,9 +73,12 @@ type TeamsClient struct {
 	chatInfoMu   sync.Mutex
 	chatInfoSigs map[string]stampedSig // threadID -> last announced chat info signature
 
-	pins    stateTracker // pin state of each chat on Teams; see chat_state.go
-	mutes   stateTracker // mute state of each chat on Teams
-	unreads stateTracker // marked-unread state of each chat on Teams
+	pins           stateTracker         // pin state of each chat on Teams; see chat_state.go
+	pinnedMessages pinnedMessageTracker // pinned messages of each chat; see pinned_messages.go
+	horizons       sync.Map             // threadID -> last seen consumption horizon (string); see chat_commands.go
+	activitySig    string               // newest activity item published; see activity_feed.go
+	mutes          stateTracker         // mute state of each chat on Teams
+	unreads        stateTracker         // marked-unread state of each chat on Teams
 
 	teamNamesMu sync.Mutex
 	teamNames   map[string]string // teamID -> display name (from Graph teams/channels)

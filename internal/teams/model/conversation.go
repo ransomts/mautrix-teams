@@ -18,6 +18,29 @@ type ThreadProperties struct {
 	Name              string `json:"name"`
 }
 
+// ParsePinnedItems returns the message IDs in a pinnedItems thread
+// property (not in the conversation list; see client.GetThreadPinnedItems), [{"itemId":"…","itemType":"Message"}, …], newest first.
+func ParsePinnedItems(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var items []struct {
+		ItemID   string `json:"itemId"`
+		ItemType string `json:"itemType"`
+	}
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return nil
+	}
+	var ids []string
+	for _, item := range items {
+		if id := strings.TrimSpace(item.ItemID); id != "" && (item.ItemType == "" || item.ItemType == "Message") {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 type ConversationMember struct {
 	ID            string `json:"id"`
 	MRI           string `json:"mri"`

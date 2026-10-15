@@ -126,6 +126,7 @@ func ExtractTeamsLoginMetadataFromLocalStorage(ctx context.Context, rawStorage s
 		TeamsUserID:          teamsUserID,
 		RegionChatServiceURL: skResult.ChatServiceURL,
 		RegionAmsURL:         skResult.AmsURL,
+		RegionMiddleTierURL:  skResult.MiddleTierURL,
 	}
 	// For an enterprise tenant (a tenant-specific token endpoint is
 	// configured), have the bridge refresh the skypetoken with the delegated

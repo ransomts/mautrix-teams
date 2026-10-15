@@ -58,6 +58,9 @@ type UserLoginMetadata struct {
 	// Enterprise region URLs from skype token response (regionGtms).
 	RegionChatServiceURL string `json:"region_chat_service_url,omitempty"`
 	RegionAmsURL         string `json:"region_ams_url,omitempty"`
+	// RegionMiddleTierURL is the tenant's Teams middle tier (regionGtms
+	// middleTier), for settings such as automatic replies.
+	RegionMiddleTierURL string `json:"region_middle_tier_url,omitempty"`
 
 	// How this login was created: "device_code" for the OAuth device
 	// authorization grant, empty for tokens lifted from Teams web localStorage.

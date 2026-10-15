@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,6 +26,27 @@ const presenceKeepAliveInterval = 20 * time.Second
 
 // presenceBatchSize is how many users one presence request asks about.
 const presenceBatchSize = 100
+
+// presenceStatus is the Matrix presence and status message for Teams
+// presence p at now.  The message's first line is Teams' word for the
+// state ("In a meeting"; empty for plain available or offline); a status
+// note and an out-of-office message follow on lines of their own,
+// "Note: …" and "Out of office: …", the only way to carry them, since a
+// Matrix presence has no other text.
+func presenceStatus(p presence.Presence, now time.Time) (event.Presence, string) {
+	mp, status := mapTeamsPresence(p.Availability, p.Activity)
+	lines := []string{status}
+	if note := p.Note.Text(now); note != "" {
+		lines = append(lines, "Note: "+note)
+	}
+	if oof := p.CalendarData.OutOfOfficeNote.Text(now); oof != "" && p.CalendarData.IsOutOfOffice {
+		lines = append(lines, "Out of office: "+oof)
+	}
+	if len(lines) == 1 {
+		return mp, status
+	}
+	return mp, strings.Join(lines, "\n")
+}
 
 // mapTeamsPresence converts a Teams availability and activity to a Matrix
 // presence and status message.  Matrix has only online, unavailable and
@@ -59,43 +81,10 @@ func mapTeamsPresence(availability, activity string) (event.Presence, string) {
 	return p, status
 }
 
-// ensurePresenceToken returns a token for the Teams presence service,
-// refreshing it from the login's refresh token when it is missing or about
-// to expire.  It lives only in memory: one refresh an hour is cheap.
+// ensurePresenceToken returns a token for the Teams presence service; see
+// resourceToken.
 func (c *TeamsClient) ensurePresenceToken(ctx context.Context) (string, bool, error) {
-	c.tokenMu.Lock()
-	defer c.tokenMu.Unlock()
-	if c.superseded() {
-		return "", false, errClientSuperseded
-	}
-	now := time.Now().UTC()
-	if c.presenceToken != "" && now.Add(5*time.Minute).Before(c.presenceTokenExpiry) {
-		return c.presenceToken, false, nil
-	}
-	if err := c.presenceRefreshFail.blocked(now); err != nil {
-		return "", false, err
-	}
-	refreshToken := strings.TrimSpace(c.Meta.RefreshToken)
-	if refreshToken == "" {
-		return "", false, errors.New("missing refresh token for presence token")
-	}
-	authClient := *newConfiguredAuthClientForLogin(c.Main, c.Meta)
-	authClient.Scopes = []string{presence.Scope, "openid", "profile", "offline_access"}
-	refreshed, err := authClient.RefreshAccessToken(ctx, refreshToken)
-	if err != nil {
-		c.presenceRefreshFail.record(now, err)
-		return "", false, err
-	}
-	c.presenceRefreshFail.reset()
-	c.presenceToken = strings.TrimSpace(refreshed.AccessToken)
-	c.presenceTokenExpiry = refreshed.Expiry()
-	if rt := strings.TrimSpace(refreshed.RefreshToken); rt != "" && rt != c.Meta.RefreshToken {
-		c.Meta.RefreshToken = rt
-		if err := c.saveLogin(ctx); err != nil {
-			zerolog.Ctx(ctx).Warn().Err(err).Msg("Failed to save refresh token from presence token refresh")
-		}
-	}
-	return c.presenceToken, true, nil
+	return c.resourceToken(ctx, presence.Scope)
 }
 
 // presenceRequest is mautrix.ReqPresence without omitempty on the status
@@ -144,6 +133,11 @@ func (c *TeamsClient) pollPresence(ctx context.Context) {
 		}
 	}
 	c.knownUsersMu.Unlock()
+	// One's own, for publishOwnPresence.
+	self := c.selfTeamsUserID()
+	if strings.HasPrefix(self, "8:orgid:") && !slices.Contains(mris, self) {
+		mris = append(mris, self)
+	}
 	if len(mris) == 0 {
 		return
 	}
@@ -165,9 +159,7 @@ func (c *TeamsClient) pollPresence(ctx context.Context) {
 					log.Info().Msg("Presence polling disabled: the Teams presence service rejects this login's token")
 				}
 			} else {
-				c.tokenMu.Lock()
-				c.presenceToken = ""
-				c.tokenMu.Unlock()
+				c.dropResourceToken(presence.Scope)
 			}
 			return
 		}
@@ -185,6 +177,11 @@ func (c *TeamsClient) pollPresence(ctx context.Context) {
 				continue
 			}
 			c.presenceCache[uid] = p
+			if uid == self {
+				if err := c.publishOwnPresence(ctx, p); err != nil {
+					log.Debug().Err(err).Msg("Failed to publish own presence to account data")
+				}
+			}
 			if err := c.pushGhostPresence(ctx, uid, p); err != nil {
 				log.Debug().Err(err).Str("user_id", uid).Msg("Failed to set ghost presence")
 				delete(c.presenceCache, uid)
@@ -203,7 +200,7 @@ func (c *TeamsClient) keepPresenceAlive(ctx context.Context) {
 	c.presenceMu.Lock()
 	defer c.presenceMu.Unlock()
 	for uid, p := range c.presenceCache {
-		if mp, _ := mapTeamsPresence(p.Availability, p.Activity); mp == event.PresenceOffline {
+		if mp, _ := presenceStatus(p, time.Now()); mp == event.PresenceOffline {
 			continue
 		}
 		if err := c.pushGhostPresence(ctx, uid, p); err != nil {
@@ -229,7 +226,7 @@ func (c *TeamsClient) pushGhostPresence(ctx context.Context, uid string, p prese
 	if !ok {
 		return nil
 	}
-	matrixPresence, statusMsg := mapTeamsPresence(p.Availability, p.Activity)
+	matrixPresence, statusMsg := presenceStatus(p, time.Now())
 	return setPresence(ctx, asIntent.Matrix.Client, matrixPresence, statusMsg)
 }
 

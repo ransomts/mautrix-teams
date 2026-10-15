@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeProperties serves /v1/users/ME/properties the way the chat service
@@ -204,5 +205,45 @@ func TestUserPropertiesURL(t *testing.T) {
 	c.MessagesURL = "https://amer.ng.msg.teams.microsoft.com/v1/users/ME/conversations"
 	if got := c.userPropertiesURL("favorites"); got != "https://amer.ng.msg.teams.microsoft.com/v1/users/ME/properties?name=favorites" {
 		t.Errorf("url %s", got)
+	}
+}
+
+func TestSetChatMutedAndMarkUnread(t *testing.T) {
+	type call struct{ path, query, body string }
+	var calls []call
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.Method != http.MethodPut {
+			t.Errorf("method %s", r.Method)
+		}
+		calls = append(calls, call{r.URL.Path, r.URL.RawQuery, string(body)})
+	}))
+	defer server.Close()
+	client := NewClient(server.Client())
+	client.MessagesURL = server.URL + "/v1/users/ME/conversations"
+	client.Token = "token123"
+	ctx := context.Background()
+	if err := client.SetChatMuted(ctx, "19:a@unq.gbl.spaces", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetChatMuted(ctx, "19:a@unq.gbl.spaces", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.MarkChatUnread(ctx, "19:a@unq.gbl.spaces", "1790000000000;1790000000001;1789999999999", time.UnixMilli(1792000000000)); err != nil {
+		t.Fatal(err)
+	}
+	want := []call{
+		{"/v1/users/ME/conversations/19:a@unq.gbl.spaces/properties", "name=alerts", `{"alerts":"false"}`},
+		{"/v1/users/ME/conversations/19:a@unq.gbl.spaces/properties", "name=alerts", `{"alerts":"true"}`},
+		{"/v1/users/ME/conversations/19:a@unq.gbl.spaces/properties", "name=consumptionHorizonBookmark",
+			`{"consumptionHorizonBookmark":"1790000000000;1792000000000;1789999999999"}`},
+	}
+	if len(calls) != len(want) {
+		t.Fatalf("calls = %+v", calls)
+	}
+	for i := range want {
+		if calls[i] != want[i] {
+			t.Errorf("call %d = %+v, want %+v", i, calls[i], want[i])
+		}
 	}
 }

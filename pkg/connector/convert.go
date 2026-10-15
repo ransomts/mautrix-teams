@@ -58,14 +58,31 @@ func (c *TeamsClient) convertTeamsMessage(ctx context.Context, portal *bridgev2.
 		// does not take a message already bridged as edited for an edit
 		// still to come (see edit_sync.go).
 		editTime := model.ExtractEditTime(msg.PropertiesRaw)
+		importance := model.ExtractImportance(msg.PropertiesRaw)
 		for _, part := range cm.Parts {
 			if part != nil && part.DBMetadata == nil {
 				part.DBMetadata = &teamsid.MessageMetadata{EditTime: editTime}
+			}
+			if part != nil && importance != "" {
+				if part.Extra == nil {
+					part.Extra = make(map[string]any)
+				}
+				part.Extra[importanceExtraKey] = importance
 			}
 		}
 	}
 	return cm, err
 }
+
+// importanceExtraKey is the Matrix content key carrying a Teams message's
+// importance, "high" (Important) or "urgent" (Urgent), both ways: set on
+// bridged messages, and read from Matrix messages to send them so marked.
+const importanceExtraKey = "fi.mau.teams.importance"
+
+// subjectExtraKey is the Matrix content key giving a new channel post its
+// Teams subject (title), outbound.  Inbound, a subject is drawn in bold
+// above the body (withSubject).
+const subjectExtraKey = "fi.mau.teams.subject"
 
 // convertTeamsMessageContent converts a Teams message by kind: deleted,
 // call, sticker, media or plain.

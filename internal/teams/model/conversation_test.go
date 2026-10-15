@@ -206,3 +206,13 @@ func TestConversationUserState(t *testing.T) {
 		t.Errorf("got %+v", conv.Properties)
 	}
 }
+
+func TestParsePinnedItems(t *testing.T) {
+	got := ParsePinnedItems(`[{"itemId":"1760000000002","itemType":"Message"},{"itemId":"1760000000001","itemType":"Message"},{"itemId":"x","itemType":"Tab"}]`)
+	if len(got) != 2 || got[0] != "1760000000002" || got[1] != "1760000000001" {
+		t.Errorf("got %v", got)
+	}
+	if ParsePinnedItems("") != nil || ParsePinnedItems("not json") != nil {
+		t.Error("empty or bad input gave IDs")
+	}
+}

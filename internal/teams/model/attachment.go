@@ -184,6 +184,26 @@ func ExtractSafeLinks(properties json.RawMessage) []string {
 	return urls
 }
 
+// ExtractImportance returns a message's importance: "high" (Important),
+// "urgent" (Urgent) or "" (standard).
+func ExtractImportance(properties json.RawMessage) string {
+	if len(properties) == 0 {
+		return ""
+	}
+	var payload struct {
+		Importance string `json:"importance"`
+	}
+	if err := json.Unmarshal(properties, &payload); err != nil {
+		return ""
+	}
+	switch importance := strings.ToLower(strings.TrimSpace(payload.Importance)); importance {
+	case "high", "urgent":
+		return importance
+	default:
+		return ""
+	}
+}
+
 // ExtractSubject returns a channel post's title (the "subject" property),
 // or "".
 func ExtractSubject(properties json.RawMessage) string {

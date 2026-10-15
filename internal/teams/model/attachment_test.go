@@ -155,3 +155,18 @@ func TestExtractEditTime(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractImportance(t *testing.T) {
+	for raw, want := range map[string]string{
+		`{"importance":"high"}`:   "high",
+		`{"importance":"URGENT"}`: "urgent",
+		`{"importance":""}`:       "",
+		`{"importance":"normal"}`: "",
+		`{}`:                      "",
+		`not json`:                "",
+	} {
+		if got := ExtractImportance(json.RawMessage(raw)); got != want {
+			t.Errorf("ExtractImportance(%s) = %q, want %q", raw, got, want)
+		}
+	}
+}

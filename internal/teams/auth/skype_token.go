@@ -33,6 +33,7 @@ type skypeTokenRegionGtms struct {
 	ChatServiceAfd string `json:"chatServiceAfd"`
 	Ams            string `json:"ams"`
 	AmsV2          string `json:"amsV2"`
+	MiddleTier     string `json:"middleTier"`
 }
 
 type skypeTokenResponse struct {
@@ -50,6 +51,7 @@ type SkypeTokenResult struct {
 	SkypeID        string
 	ChatServiceURL string
 	AmsURL         string
+	MiddleTierURL  string
 }
 
 func (c *Client) AcquireSkypeToken(ctx context.Context, accessToken string) (*SkypeTokenResult, error) {
@@ -149,6 +151,7 @@ func (c *Client) AcquireSkypeToken(ctx context.Context, accessToken string) (*Sk
 		SkypeID:        skypeID,
 		ChatServiceURL: strings.TrimSpace(payload.RegionGtms.ChatService),
 		AmsURL:         strings.TrimSpace(payload.RegionGtms.Ams),
+		MiddleTierURL:  strings.TrimSpace(payload.RegionGtms.MiddleTier),
 	}, nil
 }
 

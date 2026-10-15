@@ -58,6 +58,17 @@ func (c *TeamsClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Mat
 	}
 	msg.AddPendingToSave(pendingMessage, networkid.TransactionID(clientMessageID), nil)
 
+	if msg.Event != nil {
+		if importance, _ := msg.Event.Content.Raw[importanceExtraKey].(string); importance == "high" || importance == "urgent" {
+			ctx = consumerclient.WithImportance(ctx, importance)
+		}
+		// A subject only titles a new channel post, not a reply in its thread.
+		if subject, _ := msg.Event.Content.Raw[subjectExtraKey].(string); strings.TrimSpace(subject) != "" &&
+			isChannelThread(threadID) && resolveTeamsThreadRoot(msg) == "" {
+			ctx = consumerclient.WithSubject(ctx, strings.TrimSpace(subject))
+		}
+	}
+
 	var err error
 	switch msg.Content.MsgType {
 	case event.MsgText, event.MsgNotice, event.MsgEmote, event.MsgLocation:

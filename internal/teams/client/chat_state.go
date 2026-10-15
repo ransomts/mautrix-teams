@@ -16,7 +16,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const favoritesProperty = "favorites"
@@ -162,4 +165,47 @@ func (c *Client) userPropertiesJSON(ctx context.Context, method string, endpoint
 		return err
 	}
 	return json.Unmarshal(data, out)
+}
+
+// conversationPropertyURL is the URL of one of the user's own properties of
+// a conversation: PUT {chat service}/v1/users/ME/conversations/{id}/properties?name={name}.
+func (c *Client) conversationPropertyURL(conversationID string, name string) string {
+	baseURL := c.MessagesURL
+	if baseURL == "" {
+		baseURL = defaultMessagesURL
+	}
+	return fmt.Sprintf("%s/v1/users/ME/conversations/%s/properties?name=%s",
+		deriveBaseURL(baseURL), url.PathEscape(conversationID), url.QueryEscape(name))
+}
+
+// setConversationProperty sets one of the user's own properties of a
+// conversation, as the Teams web app's setConversationProperty does.
+func (c *Client) setConversationProperty(ctx context.Context, conversationID string, name string, value string) error {
+	if c == nil || c.HTTP == nil {
+		return ErrMissingHTTPClient
+	}
+	if c.Token == "" {
+		return ErrMissingToken
+	}
+	return c.userPropertiesJSON(ctx, http.MethodPut, c.conversationPropertyURL(conversationID, name),
+		map[string]string{name: value}, nil)
+}
+
+// SetChatMuted mutes or unmutes a chat: its "alerts" property, "false"
+// while muted.
+func (c *Client) SetChatMuted(ctx context.Context, conversationID string, muted bool) error {
+	return c.setConversationProperty(ctx, conversationID, "alerts", strconv.FormatBool(!muted))
+}
+
+// MarkChatUnread marks a chat unread: a consumptionHorizonBookmark whose
+// time is after the read position (see model.ConversationProperties.MarkedUnread),
+// "<read time>;<now>;<read message>" from the chat's consumption horizon.
+func (c *Client) MarkChatUnread(ctx context.Context, conversationID string, horizon string, now time.Time) error {
+	fields := strings.Split(strings.TrimSpace(horizon), ";")
+	readTime, readMessage := "0", "0"
+	if len(fields) == 3 {
+		readTime, readMessage = fields[0], fields[2]
+	}
+	bookmark := fmt.Sprintf("%s;%d;%s", readTime, now.UnixMilli(), readMessage)
+	return c.setConversationProperty(ctx, conversationID, "consumptionHorizonBookmark", bookmark)
 }
